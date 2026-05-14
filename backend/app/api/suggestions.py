@@ -1,0 +1,47 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.api.deps import enforce_school_scope, get_current_user, require_roles
+from app.core.db import get_db
+from app.models.entities import StudentClass, User, UserRole
+from app.schemas.suggestions import (
+    GenerateClassRequest,
+    GenerateClassResponse,
+    SlotSuggestionOut,
+    SuggestSlotsRequest,
+    UnplacedSubjectOut,
+)
+from app.services.school_integrity import assert_schedule_payload_consistent
+from app.services.schedule_solver import generate_draft_for_class, suggest_slot_combinations
+
+router = APIRouter(prefix="/suggestions", tags=["suggestions"])
+manager_or_admin = require_roles(UserRole.admin, UserRole.school_manager)
+
+
+@router.post("/slots", response_model=list[SlotSuggestionOut])
+def suggest_slots(
+    payload: SuggestSlotsRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(manager_or_admin),
+    current_user: User = Depends(get_current_user),
+):
+    enforce_school_scope(current_user, payload.school_id)
+    assert_schedule_payload_consistent(db, payload.candidate)
+    options = suggest_slot_combinations(db, payload.school_id, payload.candidate, top_n=payload.top_n)
+    return [SlotSuggestionOut(**row) for row in options]
+
+
+@router.post("/generate-class", response_model=GenerateClassResponse)
+def generate_class_draft(
+    payload: GenerateClassRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(manager_or_admin),
+    current_user: User = Depends(get_current_user),
+):
+    enforce_school_scope(current_user, payload.school_id)
+    student_class = db.get(StudentClass, payload.class_id)
+    if student_class is None or student_class.school_id != payload.school_id:
+        raise HTTPException(status_code=400, detail={"key": "errors.classNotFoundInSchool"})
+    proposals, unplaced_raw = generate_draft_for_class(db, payload.school_id, payload.class_id)
+    unplaced = [UnplacedSubjectOut(**row) for row in unplaced_raw]
+    return GenerateClassResponse(proposals=proposals, unplaced=unplaced)
