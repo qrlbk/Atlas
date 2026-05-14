@@ -54,25 +54,27 @@ export function DashboardShell({
   return (
     <main className="dashboard-app">
       <aside className="dashboard-sidebar">
-        <div className="brand-block">
-          <div className="brand-logo">✦</div>
-          <div>
-            <p className="brand-name">Atlas</p>
-            <p className="brand-subtitle">School OS</p>
+        <div className="dashboard-sidebar-inner">
+          <div className="brand-block">
+            <div className="brand-logo">✦</div>
+            <div>
+              <p className="brand-name">Atlas</p>
+              <p className="brand-subtitle">School OS</p>
+            </div>
           </div>
+          <nav className="side-nav">
+            {NAV_ITEMS.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`side-nav-item ${pathname === item.href ? "active" : ""}`}
+                aria-current={pathname === item.href ? "page" : undefined}
+              >
+                {tNav(item.labelKey)}
+              </Link>
+            ))}
+          </nav>
         </div>
-        <nav className="side-nav">
-          {NAV_ITEMS.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`side-nav-item ${pathname === item.href ? "active" : ""}`}
-              aria-current={pathname === item.href ? "page" : undefined}
-            >
-              {tNav(item.labelKey)}
-            </Link>
-          ))}
-        </nav>
       </aside>
 
       <section className={`dashboard-main${mainClassName ? ` ${mainClassName}` : ""}`}>

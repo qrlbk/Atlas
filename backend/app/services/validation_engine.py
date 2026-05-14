@@ -18,6 +18,7 @@ from app.i18n import localize_issue
 from app.schemas.entities import ScheduleItemIn
 from app.schemas.validation import ValidationIssue
 from app.services.constraint_catalog import weight_for_issue
+from app.services.subject_teacher_match import teacher_covers_subject
 
 
 def _plan_violation_severity(school_prefs: dict | None) -> str:
@@ -34,6 +35,7 @@ def validate_schedule(
     candidate: ScheduleItemIn | None = None,
     *,
     pending: Sequence[ScheduleItemIn] | None = None,
+    check_curriculum_totals: bool = True,
 ) -> list[ValidationIssue]:
     school_row = db.get(School, school_id)
     school_prefs = school_row.scheduling_preferences if school_row else None
@@ -133,7 +135,7 @@ def validate_schedule(
         if not subject or not teacher:
             continue
         allowed = teacher.subjects or []
-        if subject.name not in allowed:
+        if not teacher_covers_subject(allowed, subject.name):
             issues.append(
                 _issue(
                     "TEACHER_SUBJECT_MISMATCH",
@@ -260,7 +262,13 @@ def validate_schedule(
             )
 
     # Rule 9: curriculum plan vs scheduled lesson counts per class/subject.
-    plan_rows = list(db.scalars(select(ClassSubjectHours).where(ClassSubjectHours.school_id == school_id)))
+    # When ``check_curriculum_totals`` is False (e.g. greedy draft placement), skip this rule so
+    # ``plan_compliance: error`` does not mark every other under-filled plan row as an error on each
+    # single-lesson candidate — which would make incremental placement impossible.
+    if check_curriculum_totals:
+        plan_rows = list(db.scalars(select(ClassSubjectHours).where(ClassSubjectHours.school_id == school_id)))
+    else:
+        plan_rows = []
     if plan_rows:
         actual_by_pair: dict[tuple[int, int], int] = defaultdict(int)
         for item in items:

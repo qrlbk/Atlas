@@ -24,6 +24,7 @@ class UnplacedSubjectOut(BaseModel):
     subject_id: int
     subject_name: str
     hours_missing: int
+    blocking_issues: list[str] = Field(default_factory=list)
 
 
 class GenerateClassResponse(BaseModel):

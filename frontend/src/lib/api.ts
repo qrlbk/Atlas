@@ -217,6 +217,7 @@ export type UnplacedSubject = {
   subject_id: number;
   subject_name: string;
   hours_missing: number;
+  blocking_issues?: string[];
 };
 
 export type SchedulePlanSummary = {

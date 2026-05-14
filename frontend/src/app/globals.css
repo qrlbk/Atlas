@@ -92,13 +92,31 @@ button:disabled {
   min-height: 100vh;
   display: grid;
   grid-template-columns: 132px 1fr;
+  align-items: stretch;
 }
 
+/* Full-height column background; inner block stays sticky with scroll if nav is long */
 .dashboard-sidebar {
   background: linear-gradient(180deg, var(--surface-sidebar) 0%, #0f1730 100%);
   color: #eef2ff;
   border-right: 1px solid rgba(255, 255, 255, 0.1);
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  z-index: 20;
+}
+
+.dashboard-sidebar-inner {
+  box-sizing: border-box;
+  width: 100%;
   padding: 0.9rem 0.55rem;
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .brand-block {
@@ -296,6 +314,15 @@ button:disabled {
   gap: 0.35rem;
 }
 
+/* Pool (lesson cards): stay visible while scrolling the tall grid */
+.schedule-main-wrap.reference-panel {
+  overflow: visible;
+}
+
+.schedule-main-wrap.reference-panel > .reference-panel-body.schedule-layout {
+  overflow: visible;
+}
+
 .schedule-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.75fr) 300px;
@@ -308,10 +335,18 @@ button:disabled {
 }
 
 .schedule-layout > .pool-sidebar {
+  position: sticky;
+  top: 0.75rem;
+  align-self: start;
+  z-index: 3;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  max-height: min(78vh, 900px);
+  max-height: calc(100vh - 1rem);
+}
+
+.schedule-layout > .pool-sidebar.reference-panel {
+  overflow: visible;
 }
 
 .schedule-layout > .pool-sidebar .pool-sidebar-cards {
@@ -1627,7 +1662,7 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .dashboard-sidebar {
+  .dashboard-sidebar-inner {
     padding: 0.8rem;
   }
 

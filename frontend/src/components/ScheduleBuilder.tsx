@@ -783,7 +783,12 @@ export function ScheduleBuilder({
       lesson: { ...dragCard.lesson, class_id: selectedClassId, school_id: schoolId }
     };
     const candidate = withSlot(normalizedCard, slotKey);
-    await api.validate(schoolId, candidate.lesson);
+    try {
+      await api.validate(schoolId, candidate.lesson);
+    } catch {
+      setSaveMessage(t("dropValidateFailed"));
+      return;
+    }
     setHistory((prev) => [...prev.slice(-19), { draftCards }]);
     setDraftCards((prev) => {
       const next = { ...prev };
@@ -981,13 +986,34 @@ export function ScheduleBuilder({
       });
       const unplacedNote =
         res.unplaced.length > 0
-          ? ` Не удалось разместить: ${res.unplaced.map((u) => `${u.subject_name} (${u.hours_missing})`).join(", ")}.`
+          ? t("generateUnplacedNote", {
+              list: res.unplaced
+                .map((u) => {
+                  const base = `${u.subject_name} (${u.hours_missing})`;
+                  const hints = u.blocking_issues?.length
+                    ? ` [${u.blocking_issues.join(", ")}]`
+                    : "";
+                  return base + hints;
+                })
+                .join(", ")
+            })
           : "";
       setSaveMessage(
-        `Добавлено уроков в черновик: ${added} из ${res.proposals.length} предложений.${unplacedNote} Проверьте сетку и сохраните.`
+        t("generateDraftSummary", {
+          added: String(added),
+          total: String(res.proposals.length),
+          unplacedNote
+        })
       );
-    } catch {
-      setSaveMessage(t("generateFailed"));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("401")) {
+        setSaveMessage(t("generateAuthExpired"));
+      } else if (msg.includes("403")) {
+        setSaveMessage(t("generateForbidden"));
+      } else {
+        setSaveMessage(t("generateFailed"));
+      }
     } finally {
       setFillFromPlanLoading(false);
     }

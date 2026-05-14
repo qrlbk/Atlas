@@ -49,7 +49,7 @@ Example:
 This describes how a future CP-SAT / LNS / heuristic solver should plug into Atlas without changing the product model.
 
 - **Input**: a consistent DB snapshot (or `school_id` inside a transaction), the set of mutable entities (e.g. schedule items to add/move), optional frozen slots or “do not touch” lessons, and school preferences (`scheduling_preferences`).
-- **Oracle**: `validate_schedule(db, school_id, candidate_item_or_none)` — same rules as the live UI and `/validation`.
+- **Oracle**: `validate_schedule(db, school_id, candidate_item_or_none)` — same rules as the live UI and `/validation`. The greedy **draft generator** calls it with `pending` (already proposed lessons in the same run), `check_curriculum_totals=False` so strict `plan_compliance: "error"` does not block placing one lesson at a time (aggregate plan rows stay enforced on full `POST /validation` and saved grids). `suggest_slot_combinations` only passes `check_curriculum_totals=False`.
 - **Objective**: minimize `score_validation_issues(issues)` (total penalty and per-code breakdown already returned by `POST /validation`). The solver searches for assignments that reduce penalty while keeping **zero error-severity** issues (or respects school policy such as `plan_compliance: "error"`).
 - **Output**: a list of operations compatible with applying changes the way the UI does today — e.g. batch create/update/delete schedule items, or a shape aligned with the frontend’s draft application flow (`applyScheduleDraft`-style). A dedicated batch REST endpoint would be post-MVP.
 
@@ -57,10 +57,11 @@ This describes how a future CP-SAT / LNS / heuristic solver should plug into Atl
 
 `generate_draft_for_class` in `backend/app/services/schedule_solver.py` is a **greedy helper**, not a global solver. Limitations (see also the module docstring there):
 
-- Proposed lessons are always **`is_grouped=False`** with `group_id=None` — **grouped flows / shared lessons are not represented** in this autofill path.
-- Teacher order is deterministic, not optimized for fairness or preferences.
+- Each placement step calls `validate_schedule(..., pending=proposals, check_curriculum_totals=False)` so earlier proposals in the same run participate in conflict checks (teacher/room/class double-booking), and aggregate plan rows do not block incremental placement.
+- Curriculum rows are processed with **non-specialized subjects first** (standard rooms) so partial drafts still appear when lab capacity or specialization blocks chemistry/physics for a large class.
+- **Teacher ↔ subject** uses shared matching with validation: case-insensitive names and aliases (`PE` ↔ `Physical Education`, `Math` ↔ `Mathematics`, `Chem`/`химия` ↔ `Chemistry`, `Phys`/`физика` ↔ `Physics`) so the generator and `TEACHER_SUBJECT_MISMATCH` stay consistent.
 - Slot/room search is first-fit among combinations that pass the oracle, not cost-optimal across the whole week.
-- Post-MVP extensions: grouped lessons, teacher/slot preferences, and a true optimizer on top of the same oracle and scoring.
+- When a curriculum row cannot be placed, the API includes **`blocking_issues`**: error codes from the **first** `(teacher, slot, room)` attempt in the same order as the greedy search (not a mix of many cells).
 
 ## Roles
 

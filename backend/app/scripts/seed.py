@@ -134,10 +134,11 @@ def run_seed() -> None:
                 db.flush()
             teacher_by_name[full_name] = teacher
 
+        # Lab capacity must fit largest class (10B=27) for chemistry/physics validation.
         classroom_specs = [
             ("101", 30, ClassroomSpecialization.standard),
-            ("Lab-C1", 24, ClassroomSpecialization.chemistry_lab),
-            ("Lab-P1", 24, ClassroomSpecialization.physics_lab),
+            ("Lab-C1", 35, ClassroomSpecialization.chemistry_lab),
+            ("Lab-P1", 35, ClassroomSpecialization.physics_lab),
             ("Gym-1", 40, ClassroomSpecialization.gym),
         ]
         classroom_by_number: dict[str, Classroom] = {}

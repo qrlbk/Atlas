@@ -15,14 +15,15 @@ from app.services.school_integrity import assert_schedule_payload_consistent
 from app.services.schedule_solver import generate_draft_for_class, suggest_slot_combinations
 
 router = APIRouter(prefix="/suggestions", tags=["suggestions"])
-manager_or_admin = require_roles(UserRole.admin, UserRole.school_manager)
+# Draft suggestions do not mutate the database; viewers may use them like /validation.
+suggestions_user = require_roles(UserRole.admin, UserRole.school_manager, UserRole.viewer)
 
 
 @router.post("/slots", response_model=list[SlotSuggestionOut])
 def suggest_slots(
     payload: SuggestSlotsRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(manager_or_admin),
+    _: User = Depends(suggestions_user),
     current_user: User = Depends(get_current_user),
 ):
     enforce_school_scope(current_user, payload.school_id)
@@ -35,7 +36,7 @@ def suggest_slots(
 def generate_class_draft(
     payload: GenerateClassRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(manager_or_admin),
+    _: User = Depends(suggestions_user),
     current_user: User = Depends(get_current_user),
 ):
     enforce_school_scope(current_user, payload.school_id)
