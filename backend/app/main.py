@@ -7,6 +7,7 @@ from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
 from app.api.imports import router as imports_router
 from app.api.resources import router as resources_router
+from app.api.solver_jobs import router as solver_jobs_router
 from app.api.suggestions import router as suggestions_router
 from app.api.validation import router as validation_router
 from app.core.config import resolved_cors_origins
@@ -29,6 +30,7 @@ app.include_router(validation_router)
 app.include_router(analytics_router)
 app.include_router(suggestions_router)
 app.include_router(imports_router)
+app.include_router(solver_jobs_router)
 
 
 @app.middleware("http")

@@ -109,5 +109,10 @@ class SchoolOut(BaseModel):
     id: int
     name: str
     address: str
+    scheduling_preferences: dict | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class SchoolPatch(BaseModel):
+    scheduling_preferences: dict | None = None

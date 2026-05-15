@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -28,6 +29,7 @@ from app.schemas.entities import (
     ScheduleItemIn,
     ScheduleItemOut,
     SchoolOut,
+    SchoolPatch,
     StudentClassIn,
     StudentClassOut,
     SubjectOut,
@@ -45,6 +47,7 @@ from app.services.school_integrity import (
     assert_schedule_payload_consistent,
     ensure_payload_school_id_matches_entity,
 )
+from app.services.schedule_exports import build_schedule_export
 
 
 router = APIRouter()
@@ -59,6 +62,25 @@ def list_schools(db: Session = Depends(get_db), current_user: User = Depends(get
         school = db.get(School, current_user.school_id)
         return [school] if school else []
     return []
+
+
+@router.patch("/schools/{school_id}", response_model=SchoolOut)
+def patch_school(
+    school_id: int,
+    payload: SchoolPatch,
+    db: Session = Depends(get_db),
+    _: User = Depends(manager_or_admin),
+    current_user: User = Depends(get_current_user),
+):
+    enforce_school_scope(current_user, school_id)
+    school = db.get(School, school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail={"key": "errors.requestValidation"})
+    if payload.scheduling_preferences is not None:
+        school.scheduling_preferences = payload.scheduling_preferences
+    db.commit()
+    db.refresh(school)
+    return school
 
 
 @router.get("/subjects", response_model=list[SubjectOut])
@@ -529,3 +551,31 @@ def delete_schedule_item(
     db.delete(item)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/schedule-exports")
+def export_schedule(
+    school_id: int,
+    view: str = "class",
+    format: str = "xlsx",
+    entity_id: int | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    enforce_school_scope(current_user, school_id)
+    if view not in {"class", "teacher", "school"}:
+        raise HTTPException(status_code=400, detail={"key": "errors.requestValidation"})
+    if format not in {"xlsx", "pdf"}:
+        raise HTTPException(status_code=400, detail={"key": "errors.requestValidation"})
+    try:
+        payload, media_type, filename = build_schedule_export(
+            db,
+            school_id,
+            view=view,  # type: ignore[arg-type]
+            fmt=format,  # type: ignore[arg-type]
+            entity_id=entity_id,
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"key": "errors.requestValidation"}) from None
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content=payload, media_type=media_type, headers=headers)

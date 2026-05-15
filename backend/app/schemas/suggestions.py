@@ -30,3 +30,22 @@ class UnplacedSubjectOut(BaseModel):
 class GenerateClassResponse(BaseModel):
     proposals: list[ScheduleItemIn]
     unplaced: list[UnplacedSubjectOut]
+
+
+class ScheduleDraftOperationOut(BaseModel):
+    type: str
+    id: int | None = None
+    payload: ScheduleItemIn | None = None
+
+
+class ScenarioDraftRequest(BaseModel):
+    school_id: int
+    scenario: str = Field(default="teacher_absent")
+    teacher_id: int
+    day_of_week: int | None = Field(default=None, ge=1, le=7)
+    substitute_teacher_id: int | None = None
+
+
+class ScenarioDraftResponse(BaseModel):
+    operations: list[ScheduleDraftOperationOut]
+    issues: list[str]

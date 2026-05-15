@@ -18,6 +18,10 @@ DEFAULT_ISSUE_WEIGHTS: dict[str, float] = {
     "TEACHER_LOAD_LIMIT_EXCEEDED": 400.0,
     "PLAN_UNDERFILLED": 300.0,
     "PLAN_OVERFLOW": 350.0,
+    "CLASS_SHIFT_MISMATCH": 250.0,
+    "TEACHER_SHIFT_MISMATCH": 250.0,
+    "LANGUAGE_STREAM_MISMATCH": 200.0,
+    "SCHOOL_EVENT_BLOCK": 9_500.0,
 }
 
 # issue_code -> "hard" | "soft" (informational; mirrors severity but stable for docs/tools)
@@ -34,6 +38,10 @@ ISSUE_KIND: dict[str, str] = {
     "TEACHER_LOAD_LIMIT_EXCEEDED": "soft",
     "PLAN_UNDERFILLED": "soft",
     "PLAN_OVERFLOW": "soft",
+    "CLASS_SHIFT_MISMATCH": "soft",
+    "TEACHER_SHIFT_MISMATCH": "soft",
+    "LANGUAGE_STREAM_MISMATCH": "soft",
+    "SCHOOL_EVENT_BLOCK": "hard",
 }
 
 

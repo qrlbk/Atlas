@@ -3,16 +3,19 @@
 import { useEffect, useMemo, useState } from "react";
 import {useTranslations} from "next-intl";
 import Link from "next/link";
+import { SchedulingPreferencesPanel } from "@/components/SchedulingPreferencesPanel";
 import {
   api,
   Classroom,
   GroupFlow,
   hasAuthToken,
   ScheduleItem,
+  ScheduleQualityAnalytics,
   SchedulePlanStatus,
   StudentClass,
   Teacher,
-  TeacherAnalytics
+  TeacherAnalytics,
+  RoomAnalytics
 } from "@/lib/api";
 
 type Props = { schoolId: number };
@@ -24,6 +27,8 @@ type OverviewState = {
   flows: GroupFlow[];
   schedule: ScheduleItem[];
   analytics: TeacherAnalytics[];
+  roomAnalytics: RoomAnalytics[];
+  qualityAnalytics: ScheduleQualityAnalytics | null;
   planStatus: SchedulePlanStatus | null;
 };
 
@@ -34,6 +39,8 @@ const EMPTY_STATE: OverviewState = {
   flows: [],
   schedule: [],
   analytics: [],
+  roomAnalytics: [],
+  qualityAnalytics: null,
   planStatus: null
 };
 
@@ -59,10 +66,12 @@ export function DashboardOverview({ schoolId }: Props) {
       api.listFlows(schoolId),
       api.listSchedule(schoolId),
       api.teacherAnalytics(schoolId),
+      api.roomAnalytics(schoolId).catch(() => []),
+      api.scheduleQualityAnalytics(schoolId).catch(() => null),
       api.schedulePlanStatus(schoolId).catch(() => null)
     ])
-      .then(([teachers, classrooms, classes, flows, schedule, analytics, planStatus]) => {
-        setData({ teachers, classrooms, classes, flows, schedule, analytics, planStatus });
+      .then(([teachers, classrooms, classes, flows, schedule, analytics, roomAnalytics, qualityAnalytics, planStatus]) => {
+        setData({ teachers, classrooms, classes, flows, schedule, analytics, roomAnalytics, qualityAnalytics, planStatus });
       })
       .catch(() => {
         setData(EMPTY_STATE);
@@ -77,6 +86,7 @@ export function DashboardOverview({ schoolId }: Props) {
     const totalStudents = data.classes.reduce((sum, group) => sum + group.students_count, 0);
     const capacityBuffer = totalCapacity - totalStudents;
     const groupedLessons = data.schedule.filter((item) => item.is_grouped).length;
+    const overCapacityRooms = data.roomAnalytics.filter((room) => room.over_capacity_risk).length;
     return {
       teachers: data.teachers.length,
       classrooms: data.classrooms.length,
@@ -87,7 +97,8 @@ export function DashboardOverview({ schoolId }: Props) {
       totalCapacity,
       totalStudents,
       capacityBuffer,
-      groupedLessons
+      groupedLessons,
+      overCapacityRooms
     };
   }, [data]);
 
@@ -222,8 +233,28 @@ export function DashboardOverview({ schoolId }: Props) {
             {t("buffer")}{" "}
             <strong className={stats.capacityBuffer < 0 ? "text-red-700" : "text-slate-700"}>{stats.capacityBuffer}</strong>
           </p>
+          <p>
+            {t("roomsAtRisk")} <strong>{stats.overCapacityRooms}</strong>
+          </p>
         </div>
       </article>
+
+      <article className="section-card compact-card">
+        <h3 className="section-title">{t("qualityTitle")}</h3>
+        <p className="section-subtitle">{t("qualitySubtitle")}</p>
+        {data.qualityAnalytics == null ? (
+          <p className="empty-note">{t("qualityUnavailable")}</p>
+        ) : (
+          <div className="compact-metrics">
+            <p>{t("qualityPenalty")} <strong>{Math.round(data.qualityAnalytics.quality.total_penalty)}</strong></p>
+            <p>{t("qualityErrors")} <strong>{data.qualityAnalytics.quality.error_count}</strong></p>
+            <p>{t("qualityWarnings")} <strong>{data.qualityAnalytics.quality.warning_count}</strong></p>
+            <p>{t("qualityIssues")} <strong>{data.qualityAnalytics.issue_count}</strong></p>
+          </div>
+        )}
+      </article>
+
+      <SchedulingPreferencesPanel schoolId={schoolId} />
 
       <article className="section-card compact-card">
         <h3 className="section-title">{t("readonlyTitle")}</h3>

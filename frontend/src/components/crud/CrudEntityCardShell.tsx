@@ -17,6 +17,7 @@ export type CrudEntityCardShellProps = {
   statEmphasis: ReactNode;
   status: CrudEntityCardStatus;
   statusLabel: string;
+  extra?: ReactNode;
   /** When false, card is read-only (no edit/delete row). */
   showActions?: boolean;
   onEdit?: () => void;
@@ -34,6 +35,7 @@ export function CrudEntityCardShell({
   statEmphasis,
   status,
   statusLabel,
+  extra,
   showActions = true,
   onEdit,
   onDelete,
@@ -72,6 +74,7 @@ export function CrudEntityCardShell({
       <p className="saas-entity-card__emphasis">{statEmphasis}</p>
 
       <span className={`status-pill ${status === "ok" ? "status-pill--success" : "status-pill--danger"}`}>{statusLabel}</span>
+      {extra ? <div className="saas-entity-card__meta">{extra}</div> : null}
 
       {hasActions ? (
         <div className="saas-entity-card__actions">

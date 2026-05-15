@@ -6,6 +6,7 @@ from app.models.entities import (
     ClassSubjectHours,
     Classroom,
     ClassroomSpecialization,
+    GroupFlow,
     LessonSlot,
     School,
     StudentClass,
@@ -268,3 +269,84 @@ def test_plan_underfilled_severity_warning_by_default(db_session):
     under = [i for i in issues if i.issue_code == "PLAN_UNDERFILLED"]
     assert len(under) == 1
     assert under[0].severity == "warning"
+
+
+def test_class_shift_mismatch_from_school_preferences(db_session):
+    s = _seed_minimal_school(db_session)
+    school = db_session.get(School, s["school"].id)
+    assert school is not None
+    school.scheduling_preferences = {"class_shift_map": {str(s["class"].id): "afternoon"}, "shift_boundary_lesson": 4}
+    db_session.add(
+        ScheduleItem(
+            class_id=s["class"].id,
+            subject_id=s["sub_math"].id,
+            teacher_id=s["t_ok"].id,
+            classroom_id=s["room"].id,
+            lesson_slot_id=s["slot1"].id,
+            is_grouped=False,
+            group_id=None,
+            school_id=s["school"].id,
+        )
+    )
+    db_session.commit()
+    issues = validate_schedule(db_session, s["school"].id, None)
+    assert any(i.issue_code == "CLASS_SHIFT_MISMATCH" for i in issues)
+
+
+def test_school_event_block_emits_issue(db_session):
+    s = _seed_minimal_school(db_session)
+    school = db_session.get(School, s["school"].id)
+    assert school is not None
+    school.scheduling_preferences = {"event_blocked_slot_ids": [s["slot1"].id], "event_block_severity": "error"}
+    db_session.add(
+        ScheduleItem(
+            class_id=s["class"].id,
+            subject_id=s["sub_math"].id,
+            teacher_id=s["t_ok"].id,
+            classroom_id=s["room"].id,
+            lesson_slot_id=s["slot1"].id,
+            is_grouped=False,
+            group_id=None,
+            school_id=s["school"].id,
+        )
+    )
+    db_session.commit()
+    issues = validate_schedule(db_session, s["school"].id, None)
+    blocked = [i for i in issues if i.issue_code == "SCHOOL_EVENT_BLOCK"]
+    assert len(blocked) == 1
+    assert blocked[0].severity == "error"
+
+
+def test_grouped_joint_booking_allows_shared_teacher_and_room(db_session):
+    s = _seed_minimal_school(db_session)
+    cls_b = StudentClass(class_name="9B", students_count=18, school_id=s["school"].id)
+    db_session.add(cls_b)
+    db_session.flush()
+
+    flow = GroupFlow(
+        group_name="Stream",
+        combined_classes=[s["class"].id, cls_b.id],
+        school_id=s["school"].id,
+    )
+    db_session.add(flow)
+    db_session.flush()
+
+    for class_id in flow.combined_classes:
+        db_session.add(
+            ScheduleItem(
+                class_id=class_id,
+                subject_id=s["sub_physics"].id,
+                teacher_id=s["t_ok"].id,
+                classroom_id=s["lab"].id,
+                lesson_slot_id=s["slot1"].id,
+                is_grouped=True,
+                group_id=flow.id,
+                school_id=s["school"].id,
+            )
+        )
+    db_session.commit()
+
+    issues = validate_schedule(db_session, s["school"].id, None)
+    codes = {i.issue_code for i in issues if i.severity == "error"}
+    assert "TEACHER_DOUBLE_BOOKING" not in codes
+    assert "CLASSROOM_DOUBLE_BOOKING" not in codes

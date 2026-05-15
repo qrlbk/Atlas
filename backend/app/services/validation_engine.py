@@ -8,6 +8,7 @@ from app.models.entities import (
     ClassSubjectHours,
     Classroom,
     GroupFlow,
+    LessonSlot,
     School,
     ScheduleItem,
     StudentClass,
@@ -29,6 +30,25 @@ def _plan_violation_severity(school_prefs: dict | None) -> str:
     return "warning"
 
 
+def _preference_lookup(mapping: dict | None, key: int) -> str | None:
+    if not mapping or not isinstance(mapping, dict):
+        return None
+    raw = mapping.get(str(key), mapping.get(key))
+    if raw is None:
+        return None
+    value = str(raw).strip().lower()
+    return value or None
+
+
+def _slot_shift(slot_lesson_number: int, school_prefs: dict | None) -> str:
+    boundary = 4
+    if school_prefs and isinstance(school_prefs, dict):
+        raw = school_prefs.get("shift_boundary_lesson")
+        if isinstance(raw, int) and raw > 0:
+            boundary = raw
+    return "morning" if slot_lesson_number <= boundary else "afternoon"
+
+
 def validate_schedule(
     db: Session,
     school_id: int,
@@ -36,6 +56,8 @@ def validate_schedule(
     *,
     pending: Sequence[ScheduleItemIn] | None = None,
     check_curriculum_totals: bool = True,
+    ignore_schedule_item_ids: set[int] | None = None,
+    replacement_batch: Sequence[tuple[int, ScheduleItemIn]] | None = None,
 ) -> list[ValidationIssue]:
     school_row = db.get(School, school_id)
     school_prefs = school_row.scheduling_preferences if school_row else None
@@ -61,22 +83,67 @@ def validate_schedule(
         )
 
     items = list(db.scalars(select(ScheduleItem).where(ScheduleItem.school_id == school_id)))
+    ignore = ignore_schedule_item_ids or set()
+    if ignore:
+        items = [it for it in items if it.id not in ignore]
+
     synthetic: list[ScheduleItem] = []
+    if replacement_batch:
+        for rid, payload in replacement_batch:
+            row = ScheduleItem(id=rid, **payload.model_dump())
+            synthetic.append(row)
     if pending:
         synthetic.extend(ScheduleItem(**p.model_dump()) for p in pending)
     if candidate is not None:
-        synthetic.append(ScheduleItem(**candidate.model_dump()))
+        same_slot = [
+            it
+            for it in items
+            if it.class_id == candidate.class_id and it.lesson_slot_id == candidate.lesson_slot_id
+        ]
+        if len(same_slot) == 1:
+            ex = same_slot[0]
+            same_body = (
+                ex.subject_id == candidate.subject_id
+                and ex.teacher_id == candidate.teacher_id
+                and ex.classroom_id == candidate.classroom_id
+                and bool(ex.is_grouped) == bool(candidate.is_grouped)
+                and (ex.group_id or None) == (candidate.group_id or None)
+            )
+            if same_body:
+                pass
+            else:
+                items = [it for it in items if it.id != ex.id]
+                row = ScheduleItem(id=ex.id, **candidate.model_dump())
+                synthetic.append(row)
+        elif not same_slot:
+            synthetic.append(ScheduleItem(**candidate.model_dump()))
+        else:
+            synthetic.append(ScheduleItem(**candidate.model_dump()))
     if synthetic:
         items = [*items, *synthetic]
 
+    slot_by_id = {s.id: s for s in db.scalars(select(LessonSlot))}
+    for it in items:
+        if it.lesson_slot is None and it.lesson_slot_id:
+            ls = slot_by_id.get(it.lesson_slot_id)
+            if ls is not None:
+                it.lesson_slot = ls
+
     issues: list[ValidationIssue] = []
+
+    def _is_grouped_joint_booking(duplicates: list[ScheduleItem]) -> bool:
+        if len(duplicates) < 2:
+            return False
+        if not all(item.is_grouped and item.group_id is not None for item in duplicates):
+            return False
+        return len({item.group_id for item in duplicates}) == 1
 
     # Rule 1: teacher can't be in two slots simultaneously.
     teacher_slot = defaultdict(list)
     for item in items:
         teacher_slot[(item.teacher_id, item.lesson_slot_id)].append(item)
     for key, duplicates in teacher_slot.items():
-        if len(duplicates) > 1:
+        if len(duplicates) > 1 and not _is_grouped_joint_booking(duplicates):
             teacher_id, slot_id = key
             issues.append(
                 _issue(
@@ -93,7 +160,7 @@ def validate_schedule(
     for item in items:
         room_slot[(item.classroom_id, item.lesson_slot_id)].append(item)
     for key, duplicates in room_slot.items():
-        if len(duplicates) > 1:
+        if len(duplicates) > 1 and not _is_grouped_joint_booking(duplicates):
             room_id, slot_id = key
             issues.append(
                 _issue(
@@ -294,5 +361,84 @@ def validate_schedule(
                         {"actual": actual, "plan_hours": plan.hours_per_week},
                     )
                 )
+
+    # Rule 10 (KZ): class/teacher shift preferences by scheduling_preferences maps.
+    class_shift_map = school_prefs.get("class_shift_map") if isinstance(school_prefs, dict) else None
+    teacher_shift_map = school_prefs.get("teacher_shift_map") if isinstance(school_prefs, dict) else None
+    for item in items:
+        slot = item.lesson_slot
+        if not slot:
+            continue
+        actual_shift = _slot_shift(slot.lesson_number, school_prefs)
+        expected_class_shift = _preference_lookup(class_shift_map, item.class_id)
+        if expected_class_shift and expected_class_shift != actual_shift:
+            issues.append(
+                _issue(
+                    "CLASS_SHIFT_MISMATCH",
+                    "warning",
+                    {"class_id": item.class_id, "expected_shift": expected_class_shift, "actual_shift": actual_shift},
+                    {"expected_shift": expected_class_shift, "actual_shift": actual_shift},
+                    {"lesson_slot_id": item.lesson_slot_id},
+                )
+            )
+        expected_teacher_shift = _preference_lookup(teacher_shift_map, item.teacher_id)
+        if expected_teacher_shift and expected_teacher_shift != actual_shift:
+            issues.append(
+                _issue(
+                    "TEACHER_SHIFT_MISMATCH",
+                    "warning",
+                    {"teacher_id": item.teacher_id, "expected_shift": expected_teacher_shift, "actual_shift": actual_shift},
+                    {"expected_shift": expected_teacher_shift, "actual_shift": actual_shift},
+                    {"lesson_slot_id": item.lesson_slot_id},
+                )
+            )
+
+    # Rule 11 (KZ): language stream checks from optional maps.
+    class_language_map = school_prefs.get("class_language_map") if isinstance(school_prefs, dict) else None
+    subject_language_requirements = (
+        school_prefs.get("subject_language_requirements") if isinstance(school_prefs, dict) else None
+    )
+    if isinstance(subject_language_requirements, dict):
+        for item in items:
+            subject = subject_cache.get(item.subject_id)
+            if not subject:
+                continue
+            req = subject_language_requirements.get(subject.name)
+            if not isinstance(req, list) or not req:
+                continue
+            allowed_streams = {str(v).strip().lower() for v in req}
+            class_stream = _preference_lookup(class_language_map, item.class_id)
+            if class_stream and class_stream not in allowed_streams:
+                issues.append(
+                    _issue(
+                        "LANGUAGE_STREAM_MISMATCH",
+                        "warning",
+                        {"class_id": item.class_id, "subject_id": item.subject_id, "class_stream": class_stream},
+                        {"class_stream": class_stream, "subject_name": subject.name},
+                        {"lesson_slot_id": item.lesson_slot_id},
+                    )
+                )
+
+    # Rule 12 (KZ): school-wide event blocks (assemblies, exams, ceremonies).
+    if isinstance(school_prefs, dict):
+        blocked_raw = school_prefs.get("event_blocked_slot_ids") or []
+        blocked_slots = {int(v) for v in blocked_raw if isinstance(v, (int, str)) and str(v).isdigit()}
+        event_severity = "error" if school_prefs.get("event_block_severity") == "error" else "warning"
+    else:
+        blocked_slots = set()
+        event_severity = "warning"
+    if blocked_slots:
+        for item in items:
+            if item.lesson_slot_id not in blocked_slots:
+                continue
+            issues.append(
+                _issue(
+                    "SCHOOL_EVENT_BLOCK",
+                    event_severity,
+                    {"lesson_slot_id": item.lesson_slot_id},
+                    None,
+                    {"lesson_slot_id": item.lesson_slot_id},
+                )
+            )
 
     return issues

@@ -7,13 +7,20 @@ from app.models.entities import (
     Classroom,
     ClassroomSpecialization,
     LessonSlot,
+    ScheduleItem,
     School,
     StudentClass,
     Subject,
     Teacher,
 )
 from app.schemas.entities import ScheduleItemIn
-from app.services.schedule_solver import generate_draft_for_class, suggest_slot_combinations
+from app.services.schedule_solver import (
+    draft_teacher_absence,
+    generate_draft_for_class,
+    optimize_proposals_ga_fallback,
+    optimize_proposals_local_search,
+    suggest_slot_combinations,
+)
 
 
 def _tiny_world(db_session):
@@ -247,5 +254,55 @@ def test_generate_unplaced_includes_blocking_issues_without_teacher(db_session):
 
     proposals, unplaced = generate_draft_for_class(db_session, school.id, cls.id)
     assert proposals == []
-    assert len(unplaced) == 1
-    assert unplaced[0]["blocking_issues"] == ["NO_QUALIFIED_TEACHER"]
+    assert len(unplaced) == 2
+    assert all(row["blocking_issues"] == ["NO_QUALIFIED_TEACHER"] for row in unplaced)
+
+
+def test_draft_teacher_absence_produces_updates_or_deletes(db_session):
+    s = _tiny_world(db_session)
+    # Persist one lesson for the teacher so scenario has something to transform.
+    db_session.add(
+        ScheduleItem(
+            class_id=s["class_id"],
+            subject_id=s["subject_id"],
+            teacher_id=s["teacher_id"],
+            classroom_id=s["classroom_id"],
+            lesson_slot_id=s["slot_id"],
+            is_grouped=False,
+            group_id=None,
+            school_id=s["school_id"],
+        )
+    )
+    # Substitute teacher can also teach the same subject.
+    substitute = Teacher(
+        full_name="Sub",
+        subjects=["Mathematics"],
+        weekly_load_limit=0,
+        unavailable_days=[],
+        school_id=s["school_id"],
+    )
+    db_session.add(substitute)
+    db_session.commit()
+
+    operations, notes = draft_teacher_absence(
+        db_session,
+        s["school_id"],
+        s["teacher_id"],
+        day_of_week=1,
+        substitute_teacher_id=substitute.id,
+    )
+    assert notes == []
+    assert len(operations) == 1
+    assert operations[0]["type"] == "update"
+    assert operations[0]["payload"].teacher_id == substitute.id
+
+
+def test_local_search_and_ga_optimizers_keep_shape(db_session):
+    s = _tiny_world(db_session)
+    proposals, _unplaced = generate_draft_for_class(db_session, s["school_id"], s["class_id"])
+    improved_local = optimize_proposals_local_search(db_session, s["school_id"], proposals, iterations=5, seed=7)
+    improved_ga = optimize_proposals_ga_fallback(
+        db_session, s["school_id"], proposals, generations=3, population_size=4, seed=7
+    )
+    assert len(improved_local) == len(proposals)
+    assert len(improved_ga) == len(proposals)

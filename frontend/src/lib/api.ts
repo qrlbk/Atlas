@@ -166,12 +166,30 @@ export type TeacherAnalytics = {
   current_load: number;
   weekly_limit: number;
   windows: number;
+  daily_load?: Record<string, number>;
+  max_daily_load?: number;
+};
+
+export type RoomAnalytics = {
+  room_id: number;
+  room_number: string;
+  specialization: string;
+  lessons_count: number;
+  capacity: number;
+  max_class_size: number;
+  over_capacity_risk: boolean;
+};
+
+export type ScheduleQualityAnalytics = {
+  issue_count: number;
+  quality: ValidationQuality;
 };
 
 export type School = {
   id: number;
   name: string;
   address: string;
+  scheduling_preferences?: Record<string, unknown> | null;
 };
 
 export type Subject = {
@@ -198,6 +216,32 @@ export type ScheduleDraftOperation =
   | { type: "create"; payload: ScheduleItem }
   | { type: "update"; id: number; payload: ScheduleItem }
   | { type: "delete"; id: number };
+
+export type ScenarioDraftResponse = {
+  operations: ScheduleDraftOperation[];
+  issues: string[];
+};
+
+export type SolverJobRequest = {
+  school_id: number;
+  class_id?: number | null;
+  strategy?: string;
+  regenerate_mode?: "fill_gaps" | "from_plan";
+  frozen_lesson_slot_ids?: number[];
+  max_runtime_seconds?: number;
+  deterministic_seed?: number;
+};
+
+export type SolverJobStatus = {
+  job_id: string;
+  status: string;
+  strategy: string;
+  progress: number;
+  error?: string | null;
+  operations: ScheduleDraftOperation[];
+  issues: string[];
+  quality?: ValidationQuality | null;
+};
 
 export type ClassSubjectHours = {
   id: number;
@@ -313,6 +357,9 @@ export type CommitImportResponse = {
   committed: boolean;
 };
 
+export type ScheduleExportView = "class" | "teacher" | "school";
+export type ScheduleExportFormat = "xlsx" | "pdf";
+
 export const api = {
   login: (email: string, password: string) =>
     requestJson<LoginResponse>("/auth/login", {
@@ -321,6 +368,8 @@ export const api = {
     }),
 
   listSchools: () => requestJson<School[]>("/schools"),
+  patchSchool: (schoolId: number, payload: { scheduling_preferences?: Record<string, unknown> | null }) =>
+    requestJson<School>(`/schools/${schoolId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   listSubjects: () => requestJson<Subject[]>("/subjects"),
   listLessonSlots: () => requestJson<LessonSlot[]>("/lesson-slots"),
 
@@ -397,6 +446,21 @@ export const api = {
   schedulePlanStatus: (schoolId: number) =>
     requestJson<SchedulePlanStatus>(`/schedule-plan-status?school_id=${schoolId}`),
 
+  downloadScheduleExport: (
+    schoolId: number,
+    view: ScheduleExportView,
+    format: ScheduleExportFormat,
+    entityId?: number
+  ) => {
+    const params = new URLSearchParams({
+      school_id: String(schoolId),
+      view,
+      format
+    });
+    if (entityId != null) params.set("entity_id", String(entityId));
+    return requestBlob(`/schedule-exports?${params.toString()}`);
+  },
+
   suggestSlots: (schoolId: number, candidate: ScheduleItem, topN = 8) =>
     requestJson<SlotSuggestion[]>("/suggestions/slots", {
       method: "POST",
@@ -409,8 +473,38 @@ export const api = {
       body: JSON.stringify({ school_id: schoolId, class_id: classId })
     }),
 
+  generateTeacherAbsenceDraft: (
+    schoolId: number,
+    teacherId: number,
+    dayOfWeek?: number,
+    substituteTeacherId?: number
+  ) =>
+    requestJson<ScenarioDraftResponse>("/suggestions/scenario-draft", {
+      method: "POST",
+      body: JSON.stringify({
+        school_id: schoolId,
+        scenario: "teacher_absent",
+        teacher_id: teacherId,
+        day_of_week: dayOfWeek ?? null,
+        substitute_teacher_id: substituteTeacherId ?? null
+      })
+    }),
+
+  createSolverJob: (payload: SolverJobRequest) =>
+    requestJson<{ job_id: string; status: string }>("/solver-jobs", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  getSolverJob: (jobId: string) => requestJson<SolverJobStatus>(`/solver-jobs/${jobId}`),
+  cancelSolverJob: (jobId: string) =>
+    requestJson<SolverJobStatus>(`/solver-jobs/${jobId}/cancel`, { method: "POST" }),
+
   teacherAnalytics: (schoolId: number) =>
     requestJson<TeacherAnalytics[]>(`/analytics/teachers?school_id=${schoolId}`),
+  roomAnalytics: (schoolId: number) =>
+    requestJson<RoomAnalytics[]>(`/analytics/rooms?school_id=${schoolId}`),
+  scheduleQualityAnalytics: (schoolId: number) =>
+    requestJson<ScheduleQualityAnalytics>(`/analytics/schedule-quality?school_id=${schoolId}`),
 
   downloadImportTemplate: (schoolId: number) =>
     requestBlob(`/imports/template?school_id=${schoolId}`),

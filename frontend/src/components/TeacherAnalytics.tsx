@@ -89,6 +89,11 @@ export function TeacherAnalytics({ schoolId, hideHeader }: Props) {
                   status={over ? "bad" : "ok"}
                   statusLabel={over ? t("overBy", { value: actual - max }) : t("withinLimit")}
                   showActions={false}
+                  extra={
+                    <p className="text-xs text-slate-500">
+                      {t("maxDaily", { value: row.max_daily_load ?? 0 })}
+                    </p>
+                  }
                 />
               );
             })}

@@ -5,6 +5,7 @@ import { DndProvider, useDrag, useDrop } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import {useTranslations} from "next-intl";
 import { api, Classroom, hasAuthToken, ScheduleDraftOperation, ScheduleItem, Subject, Teacher, ValidationIssue } from "@/lib/api";
+import { filterGroupedJointBookingIssues } from "@/lib/scheduleValidation";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
 const LESSONS = [1, 2, 3, 4, 5, 6, 7];
@@ -179,6 +180,39 @@ function issueTargetClassId(issue: ValidationIssue): number | null {
   return refNum(issue.entity_refs?.class_id);
 }
 
+function saveBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+type SandboxSnapshot = {
+  name: string;
+  savedAt: string;
+  cards: Record<SlotKey, LessonCard>;
+  penalty: number;
+};
+
+function formatSolverBreakdown(
+  operations: ScheduleDraftOperation[],
+  classNameById: Record<number, string>
+): string {
+  const counts: Record<number, number> = {};
+  for (const op of operations) {
+    if (op.type === "create" && op.payload) {
+      counts[op.payload.class_id] = (counts[op.payload.class_id] ?? 0) + 1;
+    } else if (op.type === "update" && op.payload) {
+      counts[op.payload.class_id] = (counts[op.payload.class_id] ?? 0) + 1;
+    }
+  }
+  return Object.entries(counts)
+    .map(([id, n]) => `${classNameById[Number(id)] ?? id}: +${n}`)
+    .join(", ");
+}
+
 function sameLesson(a: ScheduleItem, b: ScheduleItem) {
   return (
     a.class_id === b.class_id &&
@@ -315,7 +349,17 @@ function getSummary(cards: Record<SlotKey, LessonCard>, issues: ValidationIssue[
   return { lessons, warnings, conflicts, windows };
 }
 
-function DetailPanel({ card, issueCount }: { card?: LessonCard; issueCount: number }) {
+function DetailPanel({
+  card,
+  issueCount,
+  frozen,
+  onToggleFrozen
+}: {
+  card?: LessonCard;
+  issueCount: number;
+  frozen?: boolean;
+  onToggleFrozen?: () => void;
+}) {
   const t = useTranslations("schedule");
   return (
     <aside className="reference-panel schedule-detail-compact">
@@ -326,6 +370,16 @@ function DetailPanel({ card, issueCount }: { card?: LessonCard; issueCount: numb
       <div className="reference-panel-body space-y-3 text-sm text-slate-700">
         {card ? (
           <>
+            {onToggleFrozen ? (
+              <button
+                type="button"
+                className={`btn-schedule-ghost focus-ring-strong ${frozen ? "info-badge--warn" : ""}`}
+                onClick={onToggleFrozen}
+                data-testid="toggle-frozen-slot"
+              >
+                {frozen ? t("frozenOn") : t("frozenOff")}
+              </button>
+            ) : null}
             <div>
               <p className="text-xs text-slate-500">{t("subject")}</p>
               <p className="font-semibold">{card.subjectName}</p>
@@ -590,11 +644,42 @@ export function ScheduleBuilder({
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [fillFromPlanLoading, setFillFromPlanLoading] = useState(false);
   const [showWholeSchoolIssues, setShowWholeSchoolIssues] = useState(false);
+  const [scenarioLoading, setScenarioLoading] = useState(false);
+  const [solverRunning, setSolverRunning] = useState(false);
+  const [solverScope, setSolverScope] = useState<"class" | "school">("class");
+  const [solverPollHint, setSolverPollHint] = useState<string | null>(null);
+  const frozenStorageKey = `atlas_frozen_slots_${schoolId}_${selectedClassId}`;
+  const [frozenLessonSlotIds, setFrozenLessonSlotIds] = useState<number[]>([]);
+  const sandboxStorageKey = `atlas_sandbox_${schoolId}`;
+  const [sandboxSnapshots, setSandboxSnapshots] = useState<SandboxSnapshot[]>([]);
+  const [sandboxComparePenalty, setSandboxComparePenalty] = useState<number | null>(null);
   const slotRefs = useRef<Partial<Record<SlotKey, HTMLDivElement | null>>>({});
 
   useEffect(() => {
     setShowWholeSchoolIssues(false);
   }, [selectedClassId]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(frozenStorageKey);
+      setFrozenLessonSlotIds(raw ? (JSON.parse(raw) as number[]) : []);
+    } catch {
+      setFrozenLessonSlotIds([]);
+    }
+  }, [frozenStorageKey]);
+
+  useEffect(() => {
+    localStorage.setItem(frozenStorageKey, JSON.stringify(frozenLessonSlotIds));
+  }, [frozenStorageKey, frozenLessonSlotIds]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(sandboxStorageKey);
+      setSandboxSnapshots(raw ? (JSON.parse(raw) as SandboxSnapshot[]) : []);
+    } catch {
+      setSandboxSnapshots([]);
+    }
+  }, [sandboxStorageKey]);
   const subjectOptions = useMemo(
     () => Array.from(new Set(basePool.map((card) => card.subjectName))).sort((a, b) => a.localeCompare(b)),
     [basePool]
@@ -693,6 +778,10 @@ export function ScheduleBuilder({
               seen.add(k);
               merged.push(issue);
             }
+            merged = filterGroupedJointBookingIssues(
+              merged,
+              cards.map((c) => c.lesson)
+            );
           }
           if (cancelled) return;
           setAllIssues(merged);
@@ -1019,6 +1108,261 @@ export function ScheduleBuilder({
     }
   }
 
+  function applyOperationsLocally(operations: ScheduleDraftOperation[], opts?: { onlyClassId?: number | null }) {
+    const only = opts?.onlyClassId;
+    setHistory((prev) => [...prev.slice(-19), { draftCards }]);
+    setDraftCards((prev) => {
+      const next = { ...prev };
+      const byId = new Map<number, SlotKey>();
+      for (const [slot, card] of Object.entries(prev) as [SlotKey, LessonCard][]) {
+        if (card.lesson.id != null) byId.set(card.lesson.id, slot);
+      }
+      for (const operation of operations) {
+        if (operation.type === "create" && operation.payload) {
+          if (only != null && operation.payload.class_id !== only) continue;
+          const slotKey = lessonSlotIdToSlotKey(operation.payload.lesson_slot_id);
+          if (!slotKey || next[slotKey]) continue;
+          next[slotKey] = hydrateCard(operation.payload, subjectsCatalog, teachersCatalog, classroomsCatalog);
+          continue;
+        }
+        if (operation.type === "delete") {
+          const slot = byId.get(operation.id);
+          if (!slot) continue;
+          if (only != null && prev[slot] && prev[slot].lesson.class_id !== only) continue;
+          delete next[slot];
+          continue;
+        }
+        if (operation.type === "update" && operation.payload) {
+          const slot = byId.get(operation.id);
+          if (!slot) continue;
+          if (only != null && operation.payload.class_id !== only) continue;
+          const payload = operation.payload;
+          const updated = hydrateCard({ ...payload, id: operation.id }, subjectsCatalog, teachersCatalog, classroomsCatalog);
+          const target = lessonSlotIdToSlotKey(payload.lesson_slot_id) ?? slot;
+          if (target !== slot) delete next[slot];
+          next[target] = updated;
+        }
+      }
+      return next;
+    });
+  }
+
+  async function runTeacherAbsenceScenario() {
+    if (!selectedCard) {
+      setSaveMessage(t("pickLessonCard"));
+      return;
+    }
+    const ok = window.confirm(t("confirmTeacherAbsentDraft", { teacher: selectedCard.teacherName }));
+    if (!ok) return;
+    setScenarioLoading(true);
+    setSaveMessage(null);
+    try {
+      const day = Math.ceil(selectedCard.lesson.lesson_slot_id / 7);
+      const res = await api.generateTeacherAbsenceDraft(schoolId, selectedCard.lesson.teacher_id, day);
+      applyOperationsLocally(res.operations);
+      if (res.issues.length > 0) {
+        setSaveMessage(t("scenarioAppliedWithWarnings", { issues: res.issues.join(", ") }));
+      } else {
+        setSaveMessage(t("scenarioApplied"));
+      }
+    } catch {
+      setSaveMessage(t("scenarioFailed"));
+    } finally {
+      setScenarioLoading(false);
+    }
+  }
+
+  async function reloadDraftForSelectedClass() {
+    const [items, subjects, teachers, classrooms] = await Promise.all([
+      api.listSchedule(schoolId),
+      api.listSubjects(),
+      api.listTeachers(schoolId),
+      api.listClassrooms(schoolId)
+    ]);
+    const next: Record<SlotKey, LessonCard> = {};
+    items
+      .filter((item) => item.class_id === selectedClassId)
+      .forEach((item) => {
+        const slot = `${Math.ceil(item.lesson_slot_id / 7)}-${((item.lesson_slot_id - 1) % 7) + 1}` as SlotKey;
+        next[slot] = hydrateCard(item, subjects, teachers, classrooms);
+      });
+    setServerSnapshot(next);
+    setDraftCards(next);
+    setSaveStatus("saved");
+  }
+
+  function toggleFrozenForSelectedSlot() {
+    if (!selectedCard) return;
+    const slotId = selectedCard.lesson.lesson_slot_id;
+    setFrozenLessonSlotIds((prev) =>
+      prev.includes(slotId) ? prev.filter((id) => id !== slotId) : [...prev, slotId]
+    );
+  }
+
+  function saveSandboxSnapshot() {
+    const name = window.prompt(t("sandboxNamePrompt"));
+    if (!name?.trim()) return;
+    const penalty = allIssues.reduce(
+      (sum, issue) => sum + (issue.weight ?? (issue.severity === "error" ? 10 : 1)),
+      0
+    );
+    const snap: SandboxSnapshot = {
+      name: name.trim(),
+      savedAt: new Date().toISOString(),
+      cards: { ...draftCards },
+      penalty
+    };
+    const next = [...sandboxSnapshots.filter((s) => s.name !== snap.name), snap];
+    setSandboxSnapshots(next);
+    localStorage.setItem(sandboxStorageKey, JSON.stringify(next));
+    setSandboxComparePenalty(penalty);
+    setSaveMessage(t("sandboxSaved", { name: snap.name, penalty: String(penalty) }));
+  }
+
+  function restoreSandboxSnapshot() {
+    if (sandboxSnapshots.length === 0) {
+      setSaveMessage(t("sandboxEmpty"));
+      return;
+    }
+    const pick = window.prompt(
+      t("sandboxRestorePrompt", { names: sandboxSnapshots.map((s) => s.name).join(", ") })
+    );
+    if (!pick?.trim()) return;
+    const snap = sandboxSnapshots.find((s) => s.name === pick.trim());
+    if (!snap) {
+      setSaveMessage(t("sandboxNotFound"));
+      return;
+    }
+    setHistory((prev) => [...prev.slice(-19), { draftCards }]);
+    setDraftCards(snap.cards);
+    const currentPenalty = allIssues.reduce(
+      (sum, issue) => sum + (issue.weight ?? (issue.severity === "error" ? 10 : 1)),
+      0
+    );
+    setSaveMessage(
+      t("sandboxCompare", {
+        baseline: String(snap.penalty),
+        current: String(currentPenalty)
+      })
+    );
+  }
+
+  async function runSolverDraft(
+    strategy: "cp_sat" | "ga_fallback" | "reoptimize" = "cp_sat",
+    opts?: { regenerateMode?: "fill_gaps" | "from_plan" }
+  ) {
+    if (saveStatus === "saving") return;
+
+    const scopeClassId = solverScope === "school" ? null : selectedClassId;
+    let planUnder = "?";
+    try {
+      const plan = await api.schedulePlanStatus(schoolId);
+      planUnder = String(plan.summary.rows_under);
+    } catch {
+      /* plan hint optional */
+    }
+
+    if (opts?.regenerateMode === "from_plan") {
+      if (!window.confirm(t("confirmRegenerateStep1"))) return;
+      if (!window.confirm(t("confirmRegenerateStep2"))) return;
+    } else {
+      const scopeLabel = solverScope === "school" ? t("scopeSchool") : selectedClassLabel;
+      if (!window.confirm(t("confirmSolverRun", { scope: scopeLabel, under: planUnder }))) return;
+    }
+
+    setSolverRunning(true);
+    setSolverPollHint(null);
+    setSaveMessage(null);
+    try {
+      const created = await api.createSolverJob({
+        school_id: schoolId,
+        class_id: scopeClassId,
+        strategy,
+        regenerate_mode: opts?.regenerateMode ?? "fill_gaps",
+        frozen_lesson_slot_ids: frozenLessonSlotIds,
+        deterministic_seed: 42
+      });
+      let attempts = 0;
+      while (attempts < 45) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const status = await api.getSolverJob(created.job_id);
+        if (status.status === "queued" || status.status === "running") {
+          setSolverPollHint(t("solverProgress", { pct: String(Math.round(status.progress * 100)) }));
+        }
+        if (status.status === "completed") {
+          setSolverPollHint(null);
+          const count = status.operations.length;
+          const breakdown = formatSolverBreakdown(status.operations, classNameById);
+          const qualityNote =
+            status.quality != null
+              ? t("solverQuality", { penalty: String(Math.round(status.quality.total_penalty)) })
+              : "";
+
+          if (solverScope === "school") {
+            if (count > 0) {
+              try {
+                const persisted = await api.applyScheduleDraft(status.operations);
+                await reloadDraftForSelectedClass();
+                setHistory([]);
+                setSaveStatus("saved");
+                const breakdownNote = breakdown ? ` ${t("solverBreakdown", { breakdown })}` : "";
+                setSaveMessage(
+                  `${t("solverSchoolSaved", {
+                    strategy: status.strategy,
+                    count: String(count),
+                    created: String(persisted.created),
+                    updated: String(persisted.updated)
+                  })}${breakdownNote}${qualityNote ? ` ${qualityNote}` : ""}`
+                );
+              } catch {
+                setSaveMessage(t("solverPersistFailed"));
+              }
+            } else {
+              if (opts?.regenerateMode === "from_plan") {
+                await reloadDraftForSelectedClass();
+                setHistory([]);
+                setSaveStatus("saved");
+              }
+              const hintParts = Array.from(new Set(status.issues ?? [])).map((code) => {
+                if (code === "NO_CURRICULUM_FOR_CLASS") return t("solverEmptyNoCurriculum");
+                if (code === "SOLVER_NO_MISSING_HOURS") return t("solverEmptyNoGaps");
+                return code;
+              });
+              setSaveMessage(t("solverAppliedEmpty", { strategy: status.strategy, hint: hintParts.join(" · ") }));
+            }
+          } else {
+            applyOperationsLocally(status.operations);
+            if (count === 0) {
+              const hintParts = Array.from(new Set(status.issues ?? [])).map((code) => {
+                if (code === "NO_CURRICULUM_FOR_CLASS") return t("solverEmptyNoCurriculum");
+                if (code === "SOLVER_NO_MISSING_HOURS") return t("solverEmptyNoGaps");
+                return code;
+              });
+              setSaveMessage(t("solverAppliedEmpty", { strategy: status.strategy, hint: hintParts.join(" · ") }));
+            } else {
+              const breakdownNote = breakdown ? ` ${t("solverBreakdown", { breakdown })}` : "";
+              setSaveMessage(
+                `${t("solverApplied", { strategy: status.strategy, count: String(count) })}${breakdownNote}${qualityNote ? ` ${qualityNote}` : ""} ${t("solverClassDraftHint")}`
+              );
+            }
+          }
+          return;
+        }
+        if (status.status === "failed" || status.status === "cancelled") {
+          setSaveMessage(t("solverFailed", { reason: status.error ?? status.status }));
+          return;
+        }
+        attempts += 1;
+      }
+      setSaveMessage(t("solverFailed", { reason: "timeout" }));
+    } catch {
+      setSaveMessage(t("solverFailed", { reason: "network" }));
+    } finally {
+      setSolverRunning(false);
+      setSolverPollHint(null);
+    }
+  }
+
   function undoLast() {
     const last = history[history.length - 1];
     if (!last) return;
@@ -1066,6 +1410,24 @@ export function ScheduleBuilder({
       const filename = `schedule_${normalizedClass}_${new Date().toISOString().slice(0, 10)}.xlsx`;
       writeFileXLSX(workbook, filename);
       setSaveMessage(t("exported", {filename}));
+    } catch {
+      setSaveMessage(t("exportFailed"));
+    }
+  }
+
+  async function exportPersisted(view: "class" | "teacher" | "school", format: "xlsx" | "pdf") {
+    try {
+      const teacherId = selectedCard?.lesson.teacher_id;
+      const entityId = view === "class" ? selectedClassId : view === "teacher" ? teacherId : undefined;
+      if (view === "teacher" && entityId == null) {
+        setSaveMessage(t("pickLessonCard"));
+        return;
+      }
+      const blob = await api.downloadScheduleExport(schoolId, view, format, entityId);
+      const stamp = new Date().toISOString().slice(0, 10);
+      const filename = `atlas_schedule_${view}_${stamp}.${format}`;
+      saveBlob(blob, filename);
+      setSaveMessage(t("exported", { filename }));
     } catch {
       setSaveMessage(t("exportFailed"));
     }
@@ -1143,6 +1505,30 @@ export function ScheduleBuilder({
               <button type="button" className="btn-schedule-secondary focus-ring-strong" onClick={() => void exportToExcel()} disabled={loading}>
                 {t("exportExcel")}
               </button>
+              <button
+                type="button"
+                className="btn-schedule-secondary focus-ring-strong"
+                onClick={() => void exportPersisted("class", "pdf")}
+                disabled={loading}
+              >
+                {t("exportClassPdf")}
+              </button>
+              <button
+                type="button"
+                className="btn-schedule-secondary focus-ring-strong"
+                onClick={() => void exportPersisted("teacher", "xlsx")}
+                disabled={loading || !selectedCard}
+              >
+                {t("exportTeacherXlsx")}
+              </button>
+              <button
+                type="button"
+                className="btn-schedule-secondary focus-ring-strong"
+                onClick={() => void exportPersisted("school", "xlsx")}
+                disabled={loading}
+              >
+                {t("exportSchoolXlsx")}
+              </button>
             </div>
           </div>
         </div>
@@ -1162,6 +1548,28 @@ export function ScheduleBuilder({
         </div>
 
         <div className="schedule-ghost-toolbar">
+          <div className="schedule-scope-toggle" role="group" aria-label={t("solverScopeLabel")}>
+            <label className="schedule-scope-option">
+              <input
+                type="radio"
+                name="solverScope"
+                checked={solverScope === "class"}
+                onChange={() => setSolverScope("class")}
+                data-testid="solver-scope-class"
+              />
+              {t("scopeClass")}
+            </label>
+            <label className="schedule-scope-option">
+              <input
+                type="radio"
+                name="solverScope"
+                checked={solverScope === "school"}
+                onChange={() => setSolverScope("school")}
+                data-testid="solver-scope-school"
+              />
+              {t("scopeSchool")}
+            </label>
+          </div>
           <button
             type="button"
             className="btn-schedule-ghost focus-ring-strong"
@@ -1205,6 +1613,69 @@ export function ScheduleBuilder({
           <button
             type="button"
             className="btn-schedule-ghost focus-ring-strong"
+            disabled={!selectedCard || scenarioLoading || saveStatus === "saving"}
+            onClick={() => void runTeacherAbsenceScenario()}
+          >
+            {scenarioLoading ? "…" : t("teacherAbsentDraft")}
+          </button>
+          <button
+            type="button"
+            className="btn-schedule-ghost focus-ring-strong"
+            disabled={solverRunning || saveStatus === "saving"}
+            title={solverScope === "school" ? t("fillGapsHint") : t("fillByPlanHint")}
+            onClick={() => void runSolverDraft("cp_sat")}
+            data-testid="solver-cp-sat"
+          >
+            {solverRunning ? "…" : t("solverDraft")}
+          </button>
+          <button
+            type="button"
+            className="btn-schedule-ghost focus-ring-strong"
+            disabled={solverRunning || saveStatus === "saving"}
+            onClick={() => void runSolverDraft("ga_fallback")}
+          >
+            {solverRunning ? "…" : t("gaDraft")}
+          </button>
+          <button
+            type="button"
+            className="btn-schedule-ghost focus-ring-strong"
+            disabled={solverRunning || saveStatus === "saving"}
+            onClick={() => void runSolverDraft("reoptimize")}
+            data-testid="solver-reoptimize"
+          >
+            {solverRunning ? "…" : t("reoptimizeDraft")}
+          </button>
+          <button
+            type="button"
+            className="btn-schedule-ghost focus-ring-strong"
+            disabled={solverRunning || saveStatus === "saving"}
+            title={t("fromPlanHint")}
+            onClick={() => void runSolverDraft("cp_sat", { regenerateMode: "from_plan" })}
+            data-testid="solver-from-plan"
+          >
+            {solverRunning ? "…" : t("regenerateFromPlan")}
+          </button>
+          <button
+            type="button"
+            className="btn-schedule-ghost focus-ring-strong"
+            disabled={saveStatus === "saving"}
+            onClick={saveSandboxSnapshot}
+            data-testid="sandbox-save"
+          >
+            {t("sandboxSave")}
+          </button>
+          <button
+            type="button"
+            className="btn-schedule-ghost focus-ring-strong"
+            disabled={saveStatus === "saving"}
+            onClick={restoreSandboxSnapshot}
+            data-testid="sandbox-restore"
+          >
+            {t("sandboxRestore")}
+          </button>
+          <button
+            type="button"
+            className="btn-schedule-ghost focus-ring-strong"
             onClick={() => setViewMode((prev) => (prev === "full" ? "compact" : "full"))}
             aria-label="Toggle full view"
           >
@@ -1212,6 +1683,10 @@ export function ScheduleBuilder({
           </button>
         </div>
 
+        {solverPollHint ? <p className="schedule-hint-text">{solverPollHint}</p> : null}
+        {sandboxComparePenalty != null ? (
+          <p className="schedule-hint-text">{t("sandboxBaseline", { penalty: String(sandboxComparePenalty) })}</p>
+        ) : null}
         {saveMessage ? (
           <p className={`inline-feedback ${saveStatus === "error" ? "error" : "success"} schedule-inline-feedback`}>{saveMessage}</p>
         ) : null}
@@ -1228,6 +1703,10 @@ export function ScheduleBuilder({
                   <DetailPanel
                     card={selectedCard}
                     issueCount={selectedSlot ? (issuesBySlotGrid[selectedSlot]?.length ?? 0) : 0}
+                    frozen={
+                      selectedCard ? frozenLessonSlotIds.includes(selectedCard.lesson.lesson_slot_id) : false
+                    }
+                    onToggleFrozen={selectedCard ? toggleFrozenForSelectedSlot : undefined}
                   />
                 </div>
               ) : null}
