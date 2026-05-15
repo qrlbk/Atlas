@@ -1750,3 +1750,26 @@ button:disabled {
   padding: 0.4rem 0.6rem;
   border-radius: var(--radius-md);
 }
+
+.heatmap-cell {
+  border-radius: 4px;
+  min-width: 2rem;
+}
+.heatmap-cell--0 {
+  background: #f1f5f9;
+  color: #94a3b8;
+}
+.heatmap-cell--1 {
+  background: #dbeafe;
+}
+.heatmap-cell--2 {
+  background: #93c5fd;
+}
+.heatmap-cell--3 {
+  background: #fbbf24;
+  color: #78350f;
+}
+.heatmap-cell--4 {
+  background: #f87171;
+  color: #fff;
+}

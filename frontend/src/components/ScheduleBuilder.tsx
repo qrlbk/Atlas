@@ -648,6 +648,7 @@ export function ScheduleBuilder({
   const [solverRunning, setSolverRunning] = useState(false);
   const [solverScope, setSolverScope] = useState<"class" | "school">("class");
   const [solverPollHint, setSolverPollHint] = useState<string | null>(null);
+  const [schoolSolverDraftOnly, setSchoolSolverDraftOnly] = useState(true);
   const frozenStorageKey = `atlas_frozen_slots_${schoolId}_${selectedClassId}`;
   const [frozenLessonSlotIds, setFrozenLessonSlotIds] = useState<number[]>([]);
   const sandboxStorageKey = `atlas_sandbox_${schoolId}`;
@@ -1147,6 +1148,35 @@ export function ScheduleBuilder({
     });
   }
 
+  async function runShortenedDayScenario() {
+    const dayRaw = window.prompt(t("confirmShortenedDay"), "1");
+    if (dayRaw == null) return;
+    const maxRaw = window.prompt("Max lesson number?", "4");
+    if (maxRaw == null) return;
+    const day = Number(dayRaw);
+    const maxLesson = Number(maxRaw);
+    if (!Number.isFinite(day) || !Number.isFinite(maxLesson)) return;
+    setScenarioLoading(true);
+    try {
+      const res = await api.generateScenarioDraft({
+        school_id: schoolId,
+        scenario: "shortened_day",
+        day_of_week: day,
+        max_lesson_number: maxLesson
+      });
+      applyOperationsLocally(res.operations);
+      setSaveMessage(
+        res.issues.length
+          ? t("scenarioAppliedWithWarnings", { issues: res.issues.join(", ") })
+          : t("scenarioApplied")
+      );
+    } catch {
+      setSaveMessage(t("scenarioFailed"));
+    } finally {
+      setScenarioLoading(false);
+    }
+  }
+
   async function runTeacherAbsenceScenario() {
     if (!selectedCard) {
       setSaveMessage(t("pickLessonCard"));
@@ -1280,7 +1310,8 @@ export function ScheduleBuilder({
         strategy,
         regenerate_mode: opts?.regenerateMode ?? "fill_gaps",
         frozen_lesson_slot_ids: frozenLessonSlotIds,
-        deterministic_seed: 42
+        deterministic_seed: 42,
+        apply_as_draft: schoolSolverDraftOnly
       });
       let attempts = 0;
       while (attempts < 45) {
@@ -1298,8 +1329,22 @@ export function ScheduleBuilder({
               ? t("solverQuality", { penalty: String(Math.round(status.quality.total_penalty)) })
               : "";
 
+          const unplacedNote =
+            status.unplaced_details && status.unplaced_details.length > 0
+              ? ` ${t("solverUnplacedNote", {
+                  list: status.unplaced_details
+                    .map((u) => (u.blocking_issues ?? []).join(", ") || String(u.subject_id))
+                    .join("; ")
+                })}`
+              : "";
+
           if (solverScope === "school") {
-            if (count > 0) {
+            if (count > 0 && schoolSolverDraftOnly) {
+              applyOperationsLocally(status.operations);
+              setSaveMessage(
+                `${t("solverApplied", { strategy: status.strategy, count: String(count) })}${unplacedNote} ${t("solverClassDraftHint")}`
+              );
+            } else if (count > 0) {
               try {
                 const persisted = await api.applyScheduleDraft(status.operations);
                 await reloadDraftForSelectedClass();
@@ -1312,7 +1357,7 @@ export function ScheduleBuilder({
                     count: String(count),
                     created: String(persisted.created),
                     updated: String(persisted.updated)
-                  })}${breakdownNote}${qualityNote ? ` ${qualityNote}` : ""}`
+                  })}${breakdownNote}${qualityNote ? ` ${qualityNote}` : ""}${unplacedNote}`
                 );
               } catch {
                 setSaveMessage(t("solverPersistFailed"));
@@ -1328,7 +1373,9 @@ export function ScheduleBuilder({
                 if (code === "SOLVER_NO_MISSING_HOURS") return t("solverEmptyNoGaps");
                 return code;
               });
-              setSaveMessage(t("solverAppliedEmpty", { strategy: status.strategy, hint: hintParts.join(" · ") }));
+              setSaveMessage(
+                t("solverAppliedEmpty", { strategy: status.strategy, hint: hintParts.join(" · ") }) + unplacedNote
+              );
             }
           } else {
             applyOperationsLocally(status.operations);
@@ -1338,11 +1385,13 @@ export function ScheduleBuilder({
                 if (code === "SOLVER_NO_MISSING_HOURS") return t("solverEmptyNoGaps");
                 return code;
               });
-              setSaveMessage(t("solverAppliedEmpty", { strategy: status.strategy, hint: hintParts.join(" · ") }));
+              setSaveMessage(
+                t("solverAppliedEmpty", { strategy: status.strategy, hint: hintParts.join(" · ") }) + unplacedNote
+              );
             } else {
               const breakdownNote = breakdown ? ` ${t("solverBreakdown", { breakdown })}` : "";
               setSaveMessage(
-                `${t("solverApplied", { strategy: status.strategy, count: String(count) })}${breakdownNote}${qualityNote ? ` ${qualityNote}` : ""} ${t("solverClassDraftHint")}`
+                `${t("solverApplied", { strategy: status.strategy, count: String(count) })}${breakdownNote}${qualityNote ? ` ${qualityNote}` : ""}${unplacedNote} ${t("solverClassDraftHint")}`
               );
             }
           }
@@ -1524,6 +1573,14 @@ export function ScheduleBuilder({
               <button
                 type="button"
                 className="btn-schedule-secondary focus-ring-strong"
+                onClick={() => void exportPersisted("teacher", "pdf")}
+                disabled={loading || !selectedCard}
+              >
+                {t("exportTeacherPdf")}
+              </button>
+              <button
+                type="button"
+                className="btn-schedule-secondary focus-ring-strong"
                 onClick={() => void exportPersisted("school", "xlsx")}
                 disabled={loading}
               >
@@ -1569,6 +1626,17 @@ export function ScheduleBuilder({
               />
               {t("scopeSchool")}
             </label>
+            {solverScope === "school" ? (
+              <label className="schedule-scope-option">
+                <input
+                  type="checkbox"
+                  checked={schoolSolverDraftOnly}
+                  onChange={(e) => setSchoolSolverDraftOnly(e.target.checked)}
+                  data-testid="school-solver-draft-only"
+                />
+                {t("schoolSolverDraftOnly")}
+              </label>
+            ) : null}
           </div>
           <button
             type="button"
@@ -1617,6 +1685,15 @@ export function ScheduleBuilder({
             onClick={() => void runTeacherAbsenceScenario()}
           >
             {scenarioLoading ? "…" : t("teacherAbsentDraft")}
+          </button>
+          <button
+            type="button"
+            className="btn-schedule-ghost focus-ring-strong"
+            disabled={scenarioLoading || saveStatus === "saving"}
+            onClick={() => void runShortenedDayScenario()}
+            data-testid="scenario-shortened-day"
+          >
+            {scenarioLoading ? "…" : t("scenarioShortenedDay")}
           </button>
           <button
             type="button"

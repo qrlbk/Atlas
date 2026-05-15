@@ -19,6 +19,7 @@ from app.models.entities import (
     GroupFlow,
     LessonSlot,
     ScheduleItem,
+    School,
     Subject,
     Teacher,
 )
@@ -26,6 +27,7 @@ from app.schemas.entities import ScheduleItemIn
 from app.schemas.validation import ValidationIssue
 from app.services.schedule_cp_sat import build_placement_units
 from app.services.schedule_quality import score_validation_issues
+from app.services.scheduling_preferences import subject_teacher_consistency_mode
 from app.services.subject_teacher_match import teacher_covers_subject
 from app.services.validation_engine import validate_schedule
 
@@ -208,11 +210,33 @@ def generate_draft_for_class(
     proposals: list[ScheduleItemIn] = []
     unplaced: list[dict] = []
 
+    school = db.get(School, school_id)
+    consistency_mode = subject_teacher_consistency_mode(
+        school.scheduling_preferences if school else None
+    )
+    chosen_teacher: dict[tuple[int, int], int] = {}
+    if consistency_mode != "off":
+        for row in db.scalars(
+            select(ScheduleItem).where(
+                ScheduleItem.school_id == school_id,
+                ScheduleItem.class_id == class_id,
+            )
+        ):
+            key = (row.class_id, row.subject_id)
+            if key not in chosen_teacher:
+                chosen_teacher[key] = row.teacher_id
+
     for unit in units:
         subject = subj_by_id.get(unit.subject_id)
         if not subject:
             continue
         qualified_teachers = [t for t in teachers if _teacher_covers_subject(t, subject)]
+        if consistency_mode != "off":
+            for cid in unit.class_ids:
+                locked = chosen_teacher.get((cid, unit.subject_id))
+                if locked is not None:
+                    qualified_teachers = [t for t in qualified_teachers if t.id == locked]
+                    break
         rooms_for_subject = _ordered_rooms_for_subject(rooms, subject)
         is_grouped = len(unit.class_ids) > 1 and unit.group_id is not None
 
@@ -243,6 +267,9 @@ def generate_draft_for_class(
                         )
                         if _error_free(issues):
                             proposals.extend(batch)
+                            if consistency_mode != "off":
+                                for cid in unit.class_ids:
+                                    chosen_teacher[(cid, unit.subject_id)] = teacher.id
                             found = True
                             break
                     else:
@@ -266,6 +293,8 @@ def generate_draft_for_class(
                         )
                         if _error_free(issues):
                             proposals.append(candidate)
+                            if consistency_mode != "off":
+                                chosen_teacher[(cid, unit.subject_id)] = teacher.id
                             found = True
                             break
                 if found:
@@ -279,6 +308,8 @@ def generate_draft_for_class(
                 {
                     "subject_id": unit.subject_id,
                     "subject_name": subject.name,
+                    "class_ids": list(unit.class_ids),
+                    "group_id": unit.group_id,
                     "hours_missing": len(unit.class_ids) if is_grouped else 1,
                     "blocking_issues": _probe_placement_blockers(
                         db,

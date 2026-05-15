@@ -188,7 +188,19 @@
     "statHeadline": "Қалды: {value} сағ",
     "statHeadlineNoLimit": "Лимит жоқ · нақты {value} сағ",
     "windowsLine": "Терезе: {value}",
-    "maxDaily": "Күндік максимум: {value}"
+    "maxDaily": "Күндік максимум: {value}",
+    "heatmaps": {
+      "loading": "Heatmap жүктелуде...",
+      "empty": "Heatmap деректері жоқ.",
+      "teacherLoadTitle": "Мұғалім жүктемесі (күн бойынша)",
+      "congestionTitle": "Мектеп тығыздығы",
+      "fatigueTitle": "Қатар тұрған бір пән",
+      "fatigueEmpty": "Қатар тұрған бір пән жоқ.",
+      "teacher": "Мұғалім",
+      "day": "К{day}",
+      "daySlot": "Күн",
+      "fatigueRow": "{className}, күн {day}, пән #{subjectId}"
+    }
   },
   "crud": {
     "curriculum": {
@@ -391,7 +403,11 @@
     "scenarioAppliedWithWarnings": "Сценарий ескертпелермен қолданылды: {issues}",
     "scenarioFailed": "Сценарий draft құру мүмкін болмады.",
     "solverDraft": "Solver draft (CP-SAT)",
-    "gaDraft": "GA оңтайландыру draft",
+    "gaDraft": "Draft-ты жақсарту (local search)",
+    "solverUnplacedNote": " Орналастырылмады: {list}.",
+    "schoolSolverDraftOnly": "Мектеп solver: тек draft (автосақтамау)",
+    "scenarioShortenedDay": "Қысқартылған күн (draft)",
+    "confirmShortenedDay": "Таңдалған күні N-сабақтан кейінгі сабақтарды жоямыз ба?",
     "solverApplied": "{strategy} draft қолданылды: {count} операция.",
     "solverAppliedEmpty": "{strategy}: жаңа сабақ қосылмады. {hint}",
     "solverEmptyNoCurriculum": "Бұл сынып үшін оқу жоспары (пән бойынша сағаттар) бапталмаған.",
@@ -429,6 +445,7 @@
     "exportExcel": "Excel-ге экспорт",
     "exportClassPdf": "Сынып PDF",
     "exportTeacherXlsx": "Мұғалім XLSX",
+    "exportTeacherPdf": "Мұғалім PDF",
     "exportSchoolXlsx": "Мектеп XLSX",
     "errors": "Қателер: {value}",
     "warnings": "Ескертулер: {value}",

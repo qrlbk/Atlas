@@ -22,6 +22,7 @@ DEFAULT_ISSUE_WEIGHTS: dict[str, float] = {
     "TEACHER_SHIFT_MISMATCH": 250.0,
     "LANGUAGE_STREAM_MISMATCH": 200.0,
     "SCHOOL_EVENT_BLOCK": 9_500.0,
+    "SUBJECT_TEACHER_INCONSISTENT": 500.0,
 }
 
 # issue_code -> "hard" | "soft" (informational; mirrors severity but stable for docs/tools)
@@ -42,6 +43,7 @@ ISSUE_KIND: dict[str, str] = {
     "TEACHER_SHIFT_MISMATCH": "soft",
     "LANGUAGE_STREAM_MISMATCH": "soft",
     "SCHOOL_EVENT_BLOCK": "hard",
+    "SUBJECT_TEACHER_INCONSISTENT": "soft",
 }
 
 

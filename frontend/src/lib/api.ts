@@ -180,11 +180,6 @@ export type RoomAnalytics = {
   over_capacity_risk: boolean;
 };
 
-export type ScheduleQualityAnalytics = {
-  issue_count: number;
-  quality: ValidationQuality;
-};
-
 export type School = {
   id: number;
   name: string;
@@ -222,6 +217,15 @@ export type ScenarioDraftResponse = {
   issues: string[];
 };
 
+export type UnplacedDetail = {
+  subject_id: number;
+  subject_name?: string | null;
+  class_ids?: number[];
+  group_id?: number | null;
+  hours_missing?: number;
+  blocking_issues: string[];
+};
+
 export type SolverJobRequest = {
   school_id: number;
   class_id?: number | null;
@@ -230,6 +234,7 @@ export type SolverJobRequest = {
   frozen_lesson_slot_ids?: number[];
   max_runtime_seconds?: number;
   deterministic_seed?: number;
+  apply_as_draft?: boolean;
 };
 
 export type SolverJobStatus = {
@@ -240,7 +245,32 @@ export type SolverJobStatus = {
   error?: string | null;
   operations: ScheduleDraftOperation[];
   issues: string[];
+  unplaced_details?: UnplacedDetail[];
   quality?: ValidationQuality | null;
+};
+
+export type ScheduleQualityAnalytics = {
+  issue_count: number;
+  quality: ValidationQuality;
+  breakdown?: Record<string, number>;
+  weighted_breakdown?: Record<string, number>;
+};
+
+export type TeacherLoadMatrixRow = {
+  teacher_id: number;
+  teacher_name: string;
+  by_day: Record<string, number>;
+};
+
+export type DayCongestionAnalytics = {
+  by_day_slot: Record<string, Record<string, number>>;
+};
+
+export type ClassFatigueAlert = {
+  class_id: number;
+  class_name: string;
+  day_of_week: number;
+  subject_id: number;
 };
 
 export type ClassSubjectHours = {
@@ -490,6 +520,23 @@ export const api = {
       })
     }),
 
+  generateScenarioDraft: (payload: {
+    school_id: number;
+    scenario: string;
+    teacher_id?: number | null;
+    day_of_week?: number | null;
+    substitute_teacher_id?: number | null;
+    original_teacher_id?: number | null;
+    max_lesson_number?: number | null;
+    classroom_id?: number | null;
+    class_id?: number | null;
+    lesson_slot_id?: number | null;
+  }) =>
+    requestJson<ScenarioDraftResponse>("/suggestions/scenario-draft", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+
   createSolverJob: (payload: SolverJobRequest) =>
     requestJson<{ job_id: string; status: string }>("/solver-jobs", {
       method: "POST",
@@ -505,6 +552,12 @@ export const api = {
     requestJson<RoomAnalytics[]>(`/analytics/rooms?school_id=${schoolId}`),
   scheduleQualityAnalytics: (schoolId: number) =>
     requestJson<ScheduleQualityAnalytics>(`/analytics/schedule-quality?school_id=${schoolId}`),
+  teacherLoadMatrix: (schoolId: number) =>
+    requestJson<TeacherLoadMatrixRow[]>(`/analytics/teacher-load-matrix?school_id=${schoolId}`),
+  dayCongestion: (schoolId: number) =>
+    requestJson<DayCongestionAnalytics>(`/analytics/day-congestion?school_id=${schoolId}`),
+  classFatigue: (schoolId: number) =>
+    requestJson<{ alerts: ClassFatigueAlert[] }>(`/analytics/class-fatigue?school_id=${schoolId}`),
 
   downloadImportTemplate: (schoolId: number) =>
     requestBlob(`/imports/template?school_id=${schoolId}`),

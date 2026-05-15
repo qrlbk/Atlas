@@ -14,11 +14,11 @@ from app.schemas.suggestions import (
     SuggestSlotsRequest,
     UnplacedSubjectOut,
 )
+from app.services.scenario_engine import ScenarioConfig, apply_scenario
 from app.services.school_integrity import assert_schedule_payload_consistent
-from app.services.schedule_solver import draft_teacher_absence, generate_draft_for_class, suggest_slot_combinations
+from app.services.schedule_solver import generate_draft_for_class, suggest_slot_combinations
 
 router = APIRouter(prefix="/suggestions", tags=["suggestions"])
-# Draft suggestions do not mutate the database; viewers may use them like /validation.
 suggestions_user = require_roles(UserRole.admin, UserRole.school_manager, UserRole.viewer)
 
 
@@ -59,15 +59,27 @@ def scenario_draft(
     current_user: User = Depends(get_current_user),
 ):
     enforce_school_scope(current_user, payload.school_id)
-    if payload.scenario != "teacher_absent":
+    allowed = {
+        "teacher_absent",
+        "substitute_teacher",
+        "shortened_day",
+        "room_unavailable",
+        "emergency_free",
+    }
+    if payload.scenario not in allowed:
         raise HTTPException(status_code=400, detail={"key": "errors.requestValidation"})
-    operations, issues = draft_teacher_absence(
-        db,
-        payload.school_id,
-        payload.teacher_id,
+    config = ScenarioConfig(
+        scenario=payload.scenario,
         day_of_week=payload.day_of_week,
+        teacher_id=payload.teacher_id,
         substitute_teacher_id=payload.substitute_teacher_id,
+        original_teacher_id=payload.original_teacher_id,
+        max_lesson_number=payload.max_lesson_number,
+        classroom_id=payload.classroom_id,
+        class_id=payload.class_id,
+        lesson_slot_id=payload.lesson_slot_id,
     )
+    operations, issues = apply_scenario(db, payload.school_id, config)
     serialized = [
         ScheduleDraftOperationOut(
             type=op["type"],

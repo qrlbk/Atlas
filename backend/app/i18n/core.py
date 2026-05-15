@@ -65,6 +65,8 @@ MESSAGES = {
         "validation.LANGUAGE_STREAM_MISMATCH.fix": "Use a class stream allowed for this subject.",
         "validation.SCHOOL_EVENT_BLOCK.message": "Lesson is blocked by school event.",
         "validation.SCHOOL_EVENT_BLOCK.fix": "Move lesson to another slot.",
+        "validation.SUBJECT_TEACHER_INCONSISTENT.message": "Multiple teachers for the same subject in this class.",
+        "validation.SUBJECT_TEACHER_INCONSISTENT.fix": "Use one teacher for all hours of this subject.",
     },
     "ru": {},
     "kk": {},
@@ -128,6 +130,8 @@ MESSAGES["ru"] = MESSAGES["en"] | {
     "validation.LANGUAGE_STREAM_MISMATCH.fix": "Выберите класс с допустимым языковым потоком.",
     "validation.SCHOOL_EVENT_BLOCK.message": "Слот занят школьным мероприятием.",
     "validation.SCHOOL_EVENT_BLOCK.fix": "Перенесите урок в другой слот.",
+    "validation.SUBJECT_TEACHER_INCONSISTENT.message": "У класса несколько учителей по одному предмету.",
+    "validation.SUBJECT_TEACHER_INCONSISTENT.fix": "Закрепите одного учителя на все часы предмета.",
 }
 MESSAGES["kk"] = MESSAGES["en"] | {
     "errors.invalidCredentials": "Жарамсыз тіркелгі деректері",
@@ -188,6 +192,8 @@ MESSAGES["kk"] = MESSAGES["en"] | {
     "validation.LANGUAGE_STREAM_MISMATCH.fix": "Осы пәнге рұқсат етілген тіл ағынын таңдаңыз.",
     "validation.SCHOOL_EVENT_BLOCK.message": "Бұл слот мектеп іс-шарасына жабық.",
     "validation.SCHOOL_EVENT_BLOCK.fix": "Сабақты басқа слотқа ауыстырыңыз.",
+    "validation.SUBJECT_TEACHER_INCONSISTENT.message": "Сыныпта бір пәнге бірнеше мұғалім.",
+    "validation.SUBJECT_TEACHER_INCONSISTENT.fix": "Барлық сағаттарға бір мұғалімді тағайындаңыз.",
 }
 
 

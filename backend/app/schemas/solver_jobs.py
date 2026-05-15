@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from app.schemas.suggestions import ScheduleDraftOperationOut
+from app.schemas.suggestions import ScheduleDraftOperationOut, UnplacedSubjectOut
 
 
 class SolverJobCreateRequest(BaseModel):
@@ -13,6 +13,10 @@ class SolverJobCreateRequest(BaseModel):
     max_runtime_seconds: int = Field(default=20, ge=5, le=300)
     deterministic_seed: int = Field(default=42, ge=0, le=2_147_483_647)
     regenerate_mode: str = Field(default="fill_gaps", description="fill_gaps | from_plan")
+    apply_as_draft: bool = Field(
+        default=True,
+        description="When true, client applies operations as draft; when false, school-wide jobs may auto-persist.",
+    )
 
 
 class SolverJobCreateResponse(BaseModel):
@@ -28,4 +32,5 @@ class SolverJobStatusResponse(BaseModel):
     error: str | None = None
     operations: list[ScheduleDraftOperationOut] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
+    unplaced_details: list[UnplacedSubjectOut] = Field(default_factory=list)
     quality: dict | None = None

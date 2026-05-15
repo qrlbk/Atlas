@@ -297,6 +297,71 @@ def test_cp_sat_reports_infeasible_unit(db_session):
     assert "CP_SAT_NO_FEASIBLE_ASSIGNMENT" in (unplaced[0].get("blocking_issues") or [])
 
 
+@pytest.mark.skipif(not HAS_ORTOOLS, reason="ortools not installed")
+def test_cp_sat_respects_teacher_weekly_load_limit(db_session):
+    school = School(name="cp-sat-load-cap", address="a")
+    db_session.add(school)
+    db_session.flush()
+
+    math = Subject(name="Mathematics", requires_special_room=False, required_specialization=None)
+    db_session.add(math)
+    db_session.flush()
+
+    cls = StudentClass(class_name="10A", students_count=25, school_id=school.id)
+    db_session.add(cls)
+    db_session.flush()
+
+    teacher = Teacher(
+        full_name="Math Teacher",
+        subjects=["Mathematics"],
+        weekly_load_limit=2,
+        unavailable_days=[],
+        school_id=school.id,
+    )
+    room = Classroom(
+        room_number="101",
+        capacity=30,
+        specialization=ClassroomSpecialization.standard,
+        school_id=school.id,
+    )
+    db_session.add_all([teacher, room])
+    slots = [_slot(d, n) for d in range(1, 4) for n in range(1, 4)]
+    db_session.add_all(slots)
+    db_session.flush()
+
+    for slot in slots[:2]:
+        db_session.add(
+            ScheduleItem(
+                school_id=school.id,
+                class_id=cls.id,
+                subject_id=math.id,
+                teacher_id=teacher.id,
+                classroom_id=room.id,
+                lesson_slot_id=slot.id,
+                is_grouped=False,
+            )
+        )
+    db_session.add(
+        ClassSubjectHours(school_id=school.id, class_id=cls.id, subject_id=math.id, hours_per_week=4)
+    )
+    db_session.commit()
+
+    proposals, unplaced = solve_missing_placements_whole_school(
+        db_session,
+        school_id=school.id,
+        class_ids=[cls.id],
+        max_runtime_seconds=5,
+    )
+
+    assert len(proposals) <= 2
+    assert all(p.teacher_id == teacher.id for p in proposals)
+    if len(proposals) < 2:
+        assert any(
+            "TEACHER_LOAD_LIMIT_EXCEEDED" in (row.get("blocking_issues") or [])
+            for row in unplaced
+        )
+
+
 def test_cp_sat_reports_runtime_unavailable_when_import_fails(db_session, monkeypatch):
     original_import = builtins.__import__
 

@@ -188,7 +188,19 @@
     "statHeadline": "Осталось: {value} ч",
     "statHeadlineNoLimit": "Лимит не задан · факт {value} ч",
     "windowsLine": "Окна: {value}",
-    "maxDaily": "Макс. за день: {value}"
+    "maxDaily": "Макс. за день: {value}",
+    "heatmaps": {
+      "loading": "Загрузка heatmap...",
+      "empty": "Нет данных для heatmap.",
+      "teacherLoadTitle": "Нагрузка учителей по дням",
+      "congestionTitle": "Загрузка школы (уроков в слот)",
+      "fatigueTitle": "Один предмет подряд",
+      "fatigueEmpty": "Нет пар «один предмет подряд».",
+      "teacher": "Учитель",
+      "day": "Д{day}",
+      "daySlot": "День",
+      "fatigueRow": "{className}, день {day}, предмет #{subjectId}"
+    }
   },
   "crud": {
     "curriculum": {
@@ -391,7 +403,11 @@
     "scenarioAppliedWithWarnings": "Сценарий применен с пометками: {issues}",
     "scenarioFailed": "Не удалось построить черновик сценария.",
     "solverDraft": "Черновик солвера (CP-SAT)",
-    "gaDraft": "Оптимизатор (ГА)",
+    "gaDraft": "Улучшить черновик (local search)",
+    "solverUnplacedNote": " Не размещено: {list}.",
+    "schoolSolverDraftOnly": "Solver школы: только черновик (без автосохранения)",
+    "scenarioShortenedDay": "Укороченный день (draft)",
+    "confirmShortenedDay": "Удалить уроки после N-го урока в выбранный день?",
     "solverApplied": "Черновик от {strategy} применен: {count} операций.",
     "solverAppliedEmpty": "{strategy}: новые уроки не добавлены. {hint}",
     "solverEmptyNoCurriculum": "Для класса не задан учебный план (часы по предметам).",
@@ -429,6 +445,7 @@
     "exportExcel": "Экспорт в Excel",
     "exportClassPdf": "PDF класса",
     "exportTeacherXlsx": "XLSX учителя",
+    "exportTeacherPdf": "PDF учителя",
     "exportSchoolXlsx": "XLSX школы",
     "errors": "Ошибки: {value}",
     "warnings": "Предупр.: {value}",

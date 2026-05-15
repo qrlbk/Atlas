@@ -188,7 +188,19 @@
     "statHeadline": "Remaining: {value} h",
     "statHeadlineNoLimit": "No weekly cap · actual {value} h",
     "windowsLine": "Windows: {value}",
-    "maxDaily": "Max daily load: {value}"
+    "maxDaily": "Max daily load: {value}",
+    "heatmaps": {
+      "loading": "Loading heatmaps...",
+      "empty": "No data for heatmap.",
+      "teacherLoadTitle": "Teacher load by day",
+      "congestionTitle": "School congestion (lessons per slot)",
+      "fatigueTitle": "Same subject in consecutive periods",
+      "fatigueEmpty": "No consecutive same-subject pairs detected.",
+      "teacher": "Teacher",
+      "day": "D{day}",
+      "daySlot": "Day",
+      "fatigueRow": "{className}, day {day}, subject #{subjectId}"
+    }
   },
   "crud": {
     "teachers": {
@@ -391,7 +403,11 @@
     "scenarioAppliedWithWarnings": "Scenario applied with notes: {issues}",
     "scenarioFailed": "Could not generate scenario draft.",
     "solverDraft": "Solver draft (CP-SAT)",
-    "gaDraft": "Draft optimizer (GA)",
+    "gaDraft": "Refine draft (local search)",
+    "solverUnplacedNote": " Unplaced: {list}.",
+    "schoolSolverDraftOnly": "School solver: draft only (do not auto-save)",
+    "scenarioShortenedDay": "Shortened day (draft)",
+    "confirmShortenedDay": "Remove lessons after period N on selected day?",
     "solverApplied": "Draft from {strategy} applied: {count} operations.",
     "solverAppliedEmpty": "{strategy}: no new lessons were added. {hint}",
     "solverEmptyNoCurriculum": "No curriculum (hours per subject) is configured for this class.",
@@ -429,6 +445,7 @@
     "exportExcel": "Export to Excel",
     "exportClassPdf": "Class PDF",
     "exportTeacherXlsx": "Teacher XLSX",
+    "exportTeacherPdf": "Teacher PDF",
     "exportSchoolXlsx": "School XLSX",
     "errors": "Errors: {value}",
     "warnings": "Warnings: {value}",

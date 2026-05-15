@@ -36,8 +36,10 @@ class SolverJobRecord:
     error: str | None = None
     operations: list[dict] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
+    unplaced_details: list[dict] = field(default_factory=list)
     quality: dict | None = None
     cancel_requested: bool = False
+    apply_as_draft: bool = True
 
 
 _JOBS: dict[str, SolverJobRecord] = {}
@@ -63,6 +65,7 @@ def create_solver_job(
     max_runtime_seconds: int,
     deterministic_seed: int,
     regenerate_mode: str = "fill_gaps",
+    apply_as_draft: bool = True,
 ) -> SolverJobRecord:
     job = SolverJobRecord(
         job_id=str(uuid.uuid4()),
@@ -73,6 +76,7 @@ def create_solver_job(
         max_runtime_seconds=max_runtime_seconds,
         deterministic_seed=deterministic_seed,
         regenerate_mode=regenerate_mode,
+        apply_as_draft=apply_as_draft,
     )
     with _LOCK:
         _JOBS[job.job_id] = job
@@ -131,6 +135,7 @@ def _run_solver_job(job_id: str):
 
         operations: list[dict] = []
         all_issues: list[str] = []
+        unplaced_details: list[dict] = []
         pending: list[ScheduleItemIn] = []
         engine_tag = job.strategy
 
@@ -191,8 +196,30 @@ def _run_solver_job(job_id: str):
             )
             for row in unplaced:
                 all_issues.extend(row.get("blocking_issues", []))
+                unplaced_details.append(row)
             _append_proposals(proposals, current)
             _set_progress(job_id, progress=0.95)
+            if not proposals:
+                engine_tag = "cp_sat_fallback"
+                total = max(1, len(classes))
+                for idx, student_class in enumerate(classes):
+                    current = get_solver_job(job_id)
+                    if current is None:
+                        return
+                    if current.cancel_requested:
+                        _set_progress(job_id, status="cancelled", progress=current.progress)
+                        return
+                    if time.monotonic() - start > current.max_runtime_seconds:
+                        _set_progress(job_id, status="failed", error="SOLVER_TIMEOUT")
+                        return
+                    fb_proposals, fb_unplaced = generate_draft_for_class(
+                        db, current.school_id, student_class.id
+                    )
+                    for row in fb_unplaced:
+                        all_issues.extend(row.get("blocking_issues", []))
+                        unplaced_details.append(row)
+                    _append_proposals(fb_proposals, current)
+                    _set_progress(job_id, progress=min(0.95, (idx + 1) / total))
         else:
             if job.strategy == "cp_sat":
                 engine_tag = "cp_sat_fallback"
@@ -217,7 +244,7 @@ def _run_solver_job(job_id: str):
                         iterations=30,
                         seed=current.deterministic_seed + idx,
                     )
-                elif current.strategy == "ga_fallback":
+                elif current.strategy == "ga_fallback" and proposals:
                     proposals = optimize_proposals_ga_fallback(
                         db,
                         current.school_id,
@@ -229,6 +256,7 @@ def _run_solver_job(job_id: str):
                     )
                 for row in unplaced:
                     all_issues.extend(row.get("blocking_issues", []))
+                    unplaced_details.append(row)
                 _append_proposals(proposals, current)
                 _set_progress(job_id, progress=min(0.95, (idx + 1) / total))
 
@@ -286,6 +314,7 @@ def _run_solver_job(job_id: str):
                 return
             done.operations = operations
             done.issues = sorted(set(all_issues))
+            done.unplaced_details = unplaced_details
             done.quality = quality
             done.status = "completed"
             done.progress = 1.0

@@ -1,5 +1,6 @@
 "use client";
 
+import { ScheduleHeatmaps } from "@/components/ScheduleHeatmaps";
 import { TeacherAnalytics } from "@/components/TeacherAnalytics";
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { useDashboardState } from "@/components/dashboard/useDashboardState";
@@ -19,6 +20,7 @@ export default function AnalyticsPage() {
       actions={<span className="metric-chip subtle">{t("actions")}</span>}
     >
       <TeacherAnalytics key={`analytics-${refreshKey}`} schoolId={schoolId} hideHeader />
+      <ScheduleHeatmaps key={`heatmaps-${refreshKey}`} schoolId={schoolId} />
     </DashboardShell>
   );
 }

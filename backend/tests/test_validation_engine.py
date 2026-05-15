@@ -350,3 +350,34 @@ def test_grouped_joint_booking_allows_shared_teacher_and_room(db_session):
     codes = {i.issue_code for i in issues if i.severity == "error"}
     assert "TEACHER_DOUBLE_BOOKING" not in codes
     assert "CLASSROOM_DOUBLE_BOOKING" not in codes
+
+
+def test_subject_teacher_inconsistent_when_configured(db_session):
+    s = _seed_minimal_school(db_session)
+    s["school"].scheduling_preferences = {"subject_teacher_consistency": "error"}
+    db_session.add(
+        ScheduleItem(
+            class_id=s["class"].id,
+            subject_id=s["sub_math"].id,
+            teacher_id=s["t_ok"].id,
+            classroom_id=s["room"].id,
+            lesson_slot_id=s["slot1"].id,
+            is_grouped=False,
+            school_id=s["school"].id,
+        )
+    )
+    db_session.add(
+        ScheduleItem(
+            class_id=s["class"].id,
+            subject_id=s["sub_math"].id,
+            teacher_id=s["t_wrong"].id,
+            classroom_id=s["room"].id,
+            lesson_slot_id=s["slot2"].id,
+            is_grouped=False,
+            school_id=s["school"].id,
+        )
+    )
+    db_session.commit()
+    issues = validate_schedule(db_session, s["school"].id, None)
+    codes = {i.issue_code for i in issues if i.severity == "error"}
+    assert "SUBJECT_TEACHER_INCONSISTENT" in codes

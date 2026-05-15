@@ -19,6 +19,7 @@ from app.i18n import localize_issue
 from app.schemas.entities import ScheduleItemIn
 from app.schemas.validation import ValidationIssue
 from app.services.constraint_catalog import weight_for_issue
+from app.services.scheduling_preferences import consistency_severity, subject_teacher_consistency_mode
 from app.services.subject_teacher_match import teacher_covers_subject
 
 
@@ -325,6 +326,29 @@ def validate_schedule(
                     "warning",
                     {"teacher_id": teacher_id},
                     {"load": load, "weekly_limit": teacher.weekly_load_limit},
+                )
+            )
+
+    # Rule 8b: one teacher per (class, subject) when configured.
+    consistency_mode = subject_teacher_consistency_mode(school_prefs)
+    if consistency_mode != "off":
+        teachers_by_class_subject: dict[tuple[int, int], set[int]] = defaultdict(set)
+        for item in items:
+            teachers_by_class_subject[(item.class_id, item.subject_id)].add(item.teacher_id)
+        sev = consistency_severity(consistency_mode)
+        for (class_id, subject_id), teacher_ids in teachers_by_class_subject.items():
+            if len(teacher_ids) <= 1:
+                continue
+            issues.append(
+                _issue(
+                    "SUBJECT_TEACHER_INCONSISTENT",
+                    sev,
+                    {
+                        "class_id": class_id,
+                        "subject_id": subject_id,
+                        "teacher_ids": sorted(teacher_ids),
+                    },
+                    {"teacher_count": len(teacher_ids)},
                 )
             )
 
