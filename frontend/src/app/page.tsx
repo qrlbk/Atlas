@@ -2,6 +2,7 @@
 
 import { DashboardOverview } from "@/components/dashboard/DashboardOverview";
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
+import { OnboardingRedirect } from "@/components/OnboardingRedirect";
 import { useDashboardState } from "@/components/dashboard/useDashboardState";
 import {useTranslations} from "next-intl";
 
@@ -23,6 +24,7 @@ export default function Home() {
         </>
       }
     >
+      <OnboardingRedirect schoolId={schoolId} />
       <DashboardOverview key={`overview-${refreshKey}`} schoolId={schoolId} />
     </DashboardShell>
   );

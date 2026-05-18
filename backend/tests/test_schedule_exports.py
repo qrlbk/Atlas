@@ -1,4 +1,7 @@
 from datetime import time
+from io import BytesIO
+
+from openpyxl import load_workbook
 
 from app.models.entities import Classroom, ClassroomSpecialization, LessonSlot, ScheduleItem, School, StudentClass, Subject, Teacher
 from app.services.schedule_exports import build_schedule_export
@@ -72,3 +75,21 @@ def test_build_schedule_export_pdf_for_teacher(db_session):
     assert payload.startswith(b"%PDF-1.4")
     assert media_type == "application/pdf"
     assert filename.endswith(".pdf")
+
+
+def test_build_schedule_export_school_xlsx_has_sheet_per_class(db_session):
+    school_id, class_id, _teacher_id = _seed_export_world(db_session)
+    payload, _media_type, filename = build_schedule_export(
+        db_session,
+        school_id,
+        view="school",
+        fmt="xlsx",
+    )
+    assert filename == "schedule_school.xlsx"
+    wb = load_workbook(BytesIO(payload))
+    assert "Classes" in wb.sheetnames
+    assert "7A" in wb.sheetnames
+    ws = wb["7A"]
+    assert ws["A1"].value == "Class 7A"
+    assert ws["B2"].value == "Mon"
+    assert "Math" in str(ws["B3"].value)

@@ -3,7 +3,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {useTranslations} from "next-intl";
 import Link from "next/link";
-import { SchedulingPreferencesPanel } from "@/components/SchedulingPreferencesPanel";
 import {
   api,
   Classroom,
@@ -12,11 +11,13 @@ import {
   ScheduleItem,
   ScheduleQualityAnalytics,
   SchedulePlanStatus,
+  SchoolReadiness,
   StudentClass,
   Teacher,
   TeacherAnalytics,
   RoomAnalytics
 } from "@/lib/api";
+import { UpgradePanel } from "@/components/UpgradePanel";
 
 type Props = { schoolId: number };
 
@@ -30,6 +31,7 @@ type OverviewState = {
   roomAnalytics: RoomAnalytics[];
   qualityAnalytics: ScheduleQualityAnalytics | null;
   planStatus: SchedulePlanStatus | null;
+  readiness: SchoolReadiness | null;
 };
 
 const EMPTY_STATE: OverviewState = {
@@ -41,7 +43,8 @@ const EMPTY_STATE: OverviewState = {
   analytics: [],
   roomAnalytics: [],
   qualityAnalytics: null,
-  planStatus: null
+  planStatus: null,
+  readiness: null
 };
 
 export function DashboardOverview({ schoolId }: Props) {
@@ -68,10 +71,11 @@ export function DashboardOverview({ schoolId }: Props) {
       api.teacherAnalytics(schoolId),
       api.roomAnalytics(schoolId).catch(() => []),
       api.scheduleQualityAnalytics(schoolId).catch(() => null),
-      api.schedulePlanStatus(schoolId).catch(() => null)
+      api.schedulePlanStatus(schoolId).catch(() => null),
+      api.schoolReadiness(schoolId).catch(() => null)
     ])
-      .then(([teachers, classrooms, classes, flows, schedule, analytics, roomAnalytics, qualityAnalytics, planStatus]) => {
-        setData({ teachers, classrooms, classes, flows, schedule, analytics, roomAnalytics, qualityAnalytics, planStatus });
+      .then(([teachers, classrooms, classes, flows, schedule, analytics, roomAnalytics, qualityAnalytics, planStatus, readiness]) => {
+        setData({ teachers, classrooms, classes, flows, schedule, analytics, roomAnalytics, qualityAnalytics, planStatus, readiness });
       })
       .catch(() => {
         setData(EMPTY_STATE);
@@ -133,8 +137,48 @@ export function DashboardOverview({ schoolId }: Props) {
   if (loading) return <p className="empty-note">{t("loading")}</p>;
   if (error) return <p className="empty-note">{error}</p>;
 
+  const health = data.readiness;
+  const healthClass = health ? `health-badge health-badge--${health.status}` : "";
+
   return (
     <section className="overview-grid" data-testid="dashboard-overview">
+      <article className="section-card compact-card health-card">
+        <h3 className="section-title">{t("healthTitle")}</h3>
+        <p className="section-subtitle">{t("healthSubtitle")}</p>
+        {health == null ? (
+          <p className="empty-note">{t("healthUnavailable")}</p>
+        ) : (
+          <>
+            <p className={healthClass}>{t(`healthStatus.${health.status}`)}</p>
+            <ul className="compact-list">
+              {health.blockers.slice(0, 3).map((b, idx) => (
+                <li key={`blocker-${idx}`} className="compact-row">
+                  <span className="font-medium text-slate-800">{b.title}</span>
+                  {b.detail ? <span className="text-sm text-slate-600">{b.detail}</span> : null}
+                </li>
+              ))}
+            </ul>
+            {health.recommendations.length > 0 ? (
+              <ul className="compact-list">
+                {health.recommendations.map((rec, idx) => (
+                  <li key={`rec-${idx}`} className="text-sm text-slate-600">
+                    {rec}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {health.status === "red" && !health.summary.pro_access ? (
+              <UpgradePanel capability="solver" />
+            ) : null}
+            <p>
+              <Link href="/schedule" className="text-sky-700 underline">
+                {t("healthCta")}
+              </Link>
+            </p>
+          </>
+        )}
+      </article>
+
       <article className="section-card compact-card">
         <h3 className="section-title">{t("coreKpis")}</h3>
         <div className="sparkline-block">
@@ -252,15 +296,6 @@ export function DashboardOverview({ schoolId }: Props) {
             <p>{t("qualityIssues")} <strong>{data.qualityAnalytics.issue_count}</strong></p>
           </div>
         )}
-      </article>
-
-      <SchedulingPreferencesPanel schoolId={schoolId} />
-
-      <article className="section-card compact-card">
-        <h3 className="section-title">{t("readonlyTitle")}</h3>
-        <p className="section-subtitle">
-          {t("readonlySubtitle")}
-        </p>
       </article>
     </section>
   );

@@ -118,6 +118,28 @@ DEMO_PLAN_ROWS: list[tuple[str, str, int]] = [
     ("9A", "Chemistry", 3),
     ("9A", "Biology", 2),
     ("9A", "History", 2),
+    ("7B", "Mathematics", 5),
+    ("7B", "English", 3),
+    ("7B", "Informatics", 2),
+    ("7B", "Chemistry", 2),
+    ("7B", "PE", 3),
+    ("7B", "History", 2),
+    ("7B", "Kazakh Language", 4),
+    ("7B", "Russian Language", 4),
+    ("8B", "Mathematics", 5),
+    ("8B", "English", 4),
+    ("8B", "Informatics", 2),
+    ("8B", "Physics", 3),
+    ("8B", "Chemistry", 2),
+    ("8B", "Biology", 2),
+    ("8B", "PE", 3),
+    ("9B", "Mathematics", 6),
+    ("9B", "English", 4),
+    ("9B", "Informatics", 3),
+    ("9B", "Physics", 4),
+    ("9B", "Chemistry", 3),
+    ("9B", "Biology", 2),
+    ("9B", "History", 2),
 ]
 
 # (day_name, lesson_number, start_h, start_m, end_h, end_m, class, subject, teacher, room)
@@ -245,6 +267,10 @@ def run_seed() -> None:
             if legacy:
                 legacy.email = new_email
 
+        from datetime import datetime, timedelta
+
+        from app.models.entities import SchedulePublishState, SchoolPlan
+
         school = db.scalar(select(School).where(School.name == DEMO_SCHOOL_NAME))
         if not school:
             school = School(name=DEMO_SCHOOL_NAME, address=DEMO_SCHOOL_ADDRESS)
@@ -252,6 +278,12 @@ def run_seed() -> None:
             db.flush()
         else:
             school.address = DEMO_SCHOOL_ADDRESS
+        school.plan = SchoolPlan.pro
+        school.trial_ends_at = datetime.utcnow() + timedelta(days=14)
+        school.schedule_publish_state = SchedulePublishState.draft
+        prefs = dict(school.scheduling_preferences or {})
+        prefs["onboarding_completed"] = True
+        school.scheduling_preferences = prefs
 
         if not db.scalar(select(User).where(User.email == admin_email)):
             db.add(

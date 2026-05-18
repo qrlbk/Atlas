@@ -10,9 +10,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import enforce_school_scope, require_roles
 from app.core.db import get_db
-from app.models.entities import User, UserRole
+from app.models.entities import School, User, UserRole
 from app.schemas.imports import (
     ALL_SHEETS,
+    SHEET_SCHEDULE,
     CommitResponse,
     ImportIssue,
     ImportMode,
@@ -23,6 +24,11 @@ from app.schemas.imports import (
     allowed_modes_for,
     default_modes,
 )
+from app.services.entitlements import (
+    import_issue_buckets,
+    require_capability,
+    set_onboarding_completed,
+)
 from app.services.excel_import import (
     apply_plan,
     build_plan,
@@ -31,6 +37,9 @@ from app.services.excel_import import (
     load_workbook_from_bytes,
     plan_to_summary,
 )
+from app.services.schedule_snapshots import create_schedule_snapshot
+from app.services.school_events import log_school_event
+from app.services.school_readiness import invalidate_readiness_cache
 
 
 router = APIRouter(prefix="/imports")
@@ -75,20 +84,43 @@ def _read_upload(file: UploadFile) -> bytes:
     return data
 
 
+def _entity_preview(summary_sheets: list[SheetStats]) -> dict[str, int]:
+    preview: dict[str, int] = {}
+    for sheet in summary_sheets:
+        key = sheet.sheet.lower()
+        preview[key] = sheet.rows_to_create + sheet.rows_to_update + sheet.rows_to_replace
+    curriculum_hours = 0
+    for sheet in summary_sheets:
+        if sheet.sheet == "Curriculum":
+            curriculum_hours = sheet.rows_to_create + sheet.rows_to_update
+    if curriculum_hours:
+        preview["curriculum_hours"] = curriculum_hours
+    return preview
+
+
+def _commit_needs_snapshot(modes: dict[str, ImportMode], plan) -> bool:
+    risky = {SHEET_SCHEDULE, "Curriculum", "Teachers", "Classes"}
+    for sheet_name, mode in modes.items():
+        if sheet_name in risky and mode in (ImportMode.replace, ImportMode.upsert):
+            sheet_plan = plan.sheets.get(sheet_name)
+            if sheet_plan and sheet_plan.operations:
+                return True
+    return False
+
+
 @router.get("/template")
 def download_template(
     school_id: int,
+    db: Session = Depends(get_db),
     current_user: User = Depends(manager_or_admin),
-) -> Response:
-    """Empty workbook with one sheet per entity and column hints."""
-
+):
     enforce_school_scope(current_user, school_id)
-    content = build_template_workbook()
-    filename = f"atlas_import_template_school_{school_id}.xlsx"
+    _ = school_id
+    payload = build_template_workbook()
     return Response(
-        content=content,
+        content=payload,
         media_type=XLSX_CONTENT_TYPE,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'attachment; filename="atlas_import_template_school_{school_id}.xlsx"'},
     )
 
 
@@ -106,19 +138,31 @@ def validate_workbook(
     data = _read_upload(file)
     try:
         workbook = load_workbook_from_bytes(data)
-    except Exception as exc:  # openpyxl raises a variety of exceptions on bad files
+    except Exception as exc:
         raise HTTPException(status_code=400, detail={"key": "errors.importInvalidWorkbook"}) from exc
 
     sheet_modes = _parse_modes(modes)
     plan = build_plan(db, workbook, school_id)
     summary_sheets: list[SheetStats] = plan_to_summary(plan, sheet_modes)
     error_count, warning_count = issue_counts(plan.issues)
+    buckets = import_issue_buckets(plan.issues)
     summary = ImportSummary(
         school_id=school_id,
         error_count=error_count,
         warning_count=warning_count,
         sheets=summary_sheets,
+        entity_preview=_entity_preview(summary_sheets),
+        issue_buckets=buckets,
     )
+    log_school_event(
+        db,
+        school_id=school_id,
+        user_id=current_user.id,
+        event_type="import.validated",
+        payload={"error_count": error_count, "warning_count": warning_count},
+        commit=False,
+    )
+    db.commit()
     return ValidateResponse(
         school_id=school_id,
         summary=summary,
@@ -138,6 +182,10 @@ def commit_workbook(
     """Apply the import plan inside a transaction; rollback on any error."""
 
     enforce_school_scope(current_user, school_id)
+    school = db.get(School, school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail={"key": "errors.requestValidation"})
+
     data = _read_upload(file)
     try:
         workbook = load_workbook_from_bytes(data)
@@ -145,6 +193,9 @@ def commit_workbook(
         raise HTTPException(status_code=400, detail={"key": "errors.importInvalidWorkbook"}) from exc
 
     sheet_modes = _parse_modes(modes)
+    if sheet_modes.get(SHEET_SCHEDULE) != ImportMode.skip:
+        require_capability(db, school, "import_schedule")
+
     plan = build_plan(db, workbook, school_id)
     error_count, _warning_count = issue_counts(plan.issues)
     if error_count > 0:
@@ -155,16 +206,36 @@ def commit_workbook(
             committed=False,
         )
 
+    if _commit_needs_snapshot(sheet_modes, plan):
+        create_schedule_snapshot(
+            db,
+            school_id=school_id,
+            reason="pre_import",
+            label="Before Excel import",
+            user_id=current_user.id,
+            commit=False,
+        )
+
     try:
         applied = apply_plan(db, plan, sheet_modes)
+        set_onboarding_completed(db, school)
+        log_school_event(
+            db,
+            school_id=school_id,
+            user_id=current_user.id,
+            event_type="import.committed",
+            payload={"sheets": [a.sheet for a in applied]},
+            commit=False,
+        )
         db.commit()
     except HTTPException:
         db.rollback()
         raise
-    except Exception as exc:  # pragma: no cover - integrity errors etc
+    except Exception as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail={"key": "errors.importCommitFailed"}) from exc
 
+    invalidate_readiness_cache(school_id)
     return CommitResponse(
         school_id=school_id,
         applied=applied,
@@ -175,6 +246,4 @@ def commit_workbook(
 
 __all__ = ["router"]
 
-
-# Pacify static analyzers (Any is exported for tests/docs)
 _ = Any

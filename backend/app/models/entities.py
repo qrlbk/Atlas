@@ -31,6 +31,26 @@ class ClassroomSpecialization(str, enum.Enum):
     language_room = "language_room"
 
 
+class SchoolPlan(str, enum.Enum):
+    free = "free"
+    pro = "pro"
+
+
+class SchedulePublishState(str, enum.Enum):
+    draft = "draft"
+    reviewed = "reviewed"
+    published = "published"
+    archived = "archived"
+
+
+class SnapshotReason(str, enum.Enum):
+    pre_import = "pre_import"
+    pre_solver = "pre_solver"
+    pre_publish = "pre_publish"
+    manual = "manual"
+    pre_restore = "pre_restore"
+
+
 class School(Base):
     __tablename__ = "schools"
 
@@ -39,6 +59,49 @@ class School(Base):
     address: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     scheduling_preferences: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    plan: Mapped[SchoolPlan] = mapped_column(Enum(SchoolPlan), default=SchoolPlan.free, nullable=False)
+    trial_ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    subscription_ends_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    schedule_publish_state: Mapped[SchedulePublishState] = mapped_column(
+        Enum(SchedulePublishState), default=SchedulePublishState.draft, nullable=False
+    )
+    published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    readiness_status: Mapped[str] = mapped_column(String(16), default="unknown", nullable=False)
+    readiness_checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class SchoolEvent(Base):
+    __tablename__ = "school_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("schools.id"), nullable=False, index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ScheduleSnapshot(Base):
+    __tablename__ = "schedule_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("schools.id"), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(255), default="", nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    items_json: Mapped[list] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class UsageCounter(Base):
+    __tablename__ = "usage_counters"
+    __table_args__ = (UniqueConstraint("school_id", "metric", "period", name="uq_usage_counter"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    school_id: Mapped[int] = mapped_column(ForeignKey("schools.id"), nullable=False, index=True)
+    metric: Mapped[str] = mapped_column(String(64), nullable=False)
+    period: Mapped[str] = mapped_column(String(7), nullable=False)
+    count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
 
 class User(Base):

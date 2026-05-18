@@ -40,6 +40,17 @@ function authHeaders(): HeadersInit {
   return headers;
 }
 
+export class ApiError extends Error {
+  status: number;
+  body?: { detail?: string; code?: string };
+
+  constructor(status: number, body?: { detail?: string; code?: string }) {
+    super(body?.detail ?? `API error: ${status}`);
+    this.status = status;
+    this.body = body;
+  }
+}
+
 async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_URL}${path}`, {
     ...init,
@@ -47,7 +58,13 @@ async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> 
   });
   handleUnauthorizedResponse(response);
   if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
+    let body: { detail?: string; code?: string } | undefined;
+    try {
+      body = (await response.json()) as { detail?: string; code?: string };
+    } catch {
+      body = undefined;
+    }
+    throw new ApiError(response.status, body);
   }
   return response.json() as Promise<T>;
 }
@@ -185,6 +202,40 @@ export type School = {
   name: string;
   address: string;
   scheduling_preferences?: Record<string, unknown> | null;
+  plan?: string;
+  trial_ends_at?: string | null;
+  subscription_ends_at?: string | null;
+  schedule_publish_state?: string;
+  published_at?: string | null;
+};
+
+export type ReadinessBlocker = {
+  title: string;
+  detail: string;
+  action_hint: string;
+  severity: string;
+};
+
+export type SchoolReadiness = {
+  status: "green" | "yellow" | "red" | "unknown";
+  blockers: ReadinessBlocker[];
+  recommendations: string[];
+  summary: Record<string, unknown>;
+};
+
+export type ScheduleSnapshot = {
+  id: number;
+  school_id: number;
+  label: string;
+  reason: string;
+  created_at: string;
+  item_count: number;
+};
+
+export type HumanDiagnostic = {
+  title: string;
+  detail: string;
+  severity: string;
 };
 
 export type Subject = {
@@ -246,6 +297,7 @@ export type SolverJobStatus = {
   operations: ScheduleDraftOperation[];
   issues: string[];
   unplaced_details?: UnplacedDetail[];
+  diagnostics?: HumanDiagnostic[];
   quality?: ValidationQuality | null;
 };
 
@@ -362,6 +414,8 @@ export type ImportSummary = {
   error_count: number;
   warning_count: number;
   sheets: ImportSheetStats[];
+  entity_preview?: Record<string, number>;
+  issue_buckets?: Record<string, number>;
 };
 
 export type ValidateImportResponse = {
@@ -390,6 +444,113 @@ export type CommitImportResponse = {
 export type ScheduleExportView = "class" | "teacher" | "school";
 export type ScheduleExportFormat = "xlsx" | "pdf";
 
+export type MeUser = {
+  id: number;
+  email: string;
+  full_name: string;
+  role: string;
+  school_id: number | null;
+};
+
+export type AdminSchoolListItem = {
+  id: number;
+  name: string;
+  address: string;
+  plan: string;
+  trial_ends_at: string | null;
+  subscription_ends_at: string | null;
+  schedule_publish_state: string;
+  created_at: string;
+  readiness_status: string;
+  readiness_checked_at: string | null;
+  last_event_at: string | null;
+  pro_access: boolean;
+  manager_count: number;
+};
+
+export type AdminSchoolListResponse = {
+  items: AdminSchoolListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type AdminAttentionItem = {
+  school_id: number;
+  school_name: string;
+  reason: string;
+  plan: string;
+  readiness_status: string;
+  trial_ends_at: string | null;
+  last_event_at: string | null;
+};
+
+export type AdminDashboard = {
+  total_schools: number;
+  free_count: number;
+  pro_count: number;
+  trial_active_count: number;
+  readiness_red_count: number;
+  events_last_24h: number;
+  attention: AdminAttentionItem[];
+};
+
+export type AdminReadiness = {
+  status: string;
+  blockers: string[];
+  recommendations: string[];
+  summary: Record<string, unknown>;
+};
+
+export type AdminUser = {
+  id: number;
+  email: string;
+  full_name: string;
+  role: string;
+  school_id: number | null;
+};
+
+export type AdminUsage = { metric: string; period: string; count: number };
+
+export type AdminSnapshot = {
+  id: number;
+  label: string;
+  reason: string;
+  created_at: string;
+  item_count: number;
+};
+
+export type AdminSchoolDetail = {
+  school: AdminSchoolListItem;
+  readiness: AdminReadiness;
+  users: AdminUser[];
+  usage: AdminUsage[];
+  snapshots: AdminSnapshot[];
+  admin_notes: string | null;
+  manual_pro: boolean;
+};
+
+export type AdminEvent = {
+  id: number;
+  event_type: string;
+  created_at: string;
+  user_id: number | null;
+  payload: Record<string, unknown> | null;
+};
+
+export type AdminEventsPage = {
+  items: AdminEvent[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type AdminSchoolCreateResponse = {
+  school_id: number;
+  manager_email: string;
+  manager_password: string;
+};
+
 export const api = {
   login: (email: string, password: string) =>
     requestJson<LoginResponse>("/auth/login", {
@@ -397,9 +558,25 @@ export const api = {
       body: JSON.stringify({ email, password })
     }),
 
+  authMe: () => requestJson<MeUser>("/auth/me"),
+
   listSchools: () => requestJson<School[]>("/schools"),
-  patchSchool: (schoolId: number, payload: { scheduling_preferences?: Record<string, unknown> | null }) =>
-    requestJson<School>(`/schools/${schoolId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  patchSchool: (
+    schoolId: number,
+    payload: {
+      scheduling_preferences?: Record<string, unknown> | null;
+      plan?: string;
+      trial_ends_at?: string | null;
+      subscription_ends_at?: string | null;
+    }
+  ) => requestJson<School>(`/schools/${schoolId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  schoolReadiness: (schoolId: number) => requestJson<SchoolReadiness>(`/schools/${schoolId}/readiness`),
+  publishSchedule: (schoolId: number) =>
+    requestJson<{ ok: boolean }>(`/schools/${schoolId}/schedule/publish`, { method: "POST" }),
+  listScheduleSnapshots: (schoolId: number) =>
+    requestJson<ScheduleSnapshot[]>(`/schools/${schoolId}/schedule/snapshots`),
+  restoreScheduleSnapshot: (schoolId: number, snapshotId: number) =>
+    requestJson<{ ok: boolean }>(`/schools/${schoolId}/schedule/snapshots/${snapshotId}/restore`, { method: "POST" }),
   listSubjects: () => requestJson<Subject[]>("/subjects"),
   listLessonSlots: () => requestJson<LessonSlot[]>("/lesson-slots"),
 
@@ -480,7 +657,8 @@ export const api = {
     schoolId: number,
     view: ScheduleExportView,
     format: ScheduleExportFormat,
-    entityId?: number
+    entityId?: number,
+    simple?: boolean
   ) => {
     const params = new URLSearchParams({
       school_id: String(schoolId),
@@ -488,6 +666,7 @@ export const api = {
       format
     });
     if (entityId != null) params.set("entity_id", String(entityId));
+    if (simple) params.set("simple", "true");
     return requestBlob(`/schedule-exports?${params.toString()}`);
   },
 
@@ -576,5 +755,103 @@ export const api = {
     body.append("file", file);
     if (modes) body.append("modes", JSON.stringify(modes));
     return requestMultipart<CommitImportResponse>("/imports/commit", body);
-  }
+  },
+
+  onboardingImportModes: () =>
+    ({
+      Subjects: "upsert",
+      LessonSlots: "upsert",
+      Classes: "upsert",
+      Teachers: "upsert",
+      Classrooms: "upsert",
+      GroupFlows: "upsert",
+      Curriculum: "upsert",
+      Schedule: "skip"
+    }) as Record<string, ImportMode>,
+
+  adminDashboard: () => requestJson<AdminDashboard>("/admin/dashboard"),
+
+  adminListSchools: (params?: {
+    plan?: string;
+    health?: string;
+    q?: string;
+    sort?: string;
+    page?: number;
+    page_size?: number;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.plan) search.set("plan", params.plan);
+    if (params?.health) search.set("health", params.health);
+    if (params?.q) search.set("q", params.q);
+    if (params?.sort) search.set("sort", params.sort);
+    if (params?.page) search.set("page", String(params.page));
+    if (params?.page_size) search.set("page_size", String(params.page_size));
+    const qs = search.toString();
+    return requestJson<AdminSchoolListResponse>(`/admin/schools${qs ? `?${qs}` : ""}`);
+  },
+
+  adminGetSchool: (schoolId: number) => requestJson<AdminSchoolDetail>(`/admin/schools/${schoolId}`),
+
+  adminPatchSchool: (
+    schoolId: number,
+    body: {
+      name?: string;
+      address?: string;
+      plan?: string;
+      trial_ends_at?: string | null;
+      subscription_ends_at?: string | null;
+      admin_notes?: string;
+      manual_pro?: boolean;
+      billing?: {
+        status?: string;
+        amount_kzt?: number;
+        period_label?: string;
+        paid_at?: string;
+        notes?: string;
+      };
+    }
+  ) =>
+    requestJson<AdminSchoolListItem>(`/admin/schools/${schoolId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body)
+    }),
+
+  adminCreateSchool: (body: {
+    name: string;
+    address: string;
+    manager_email: string;
+    manager_full_name: string;
+    trial_days?: number;
+  }) =>
+    requestJson<AdminSchoolCreateResponse>("/admin/schools", {
+      method: "POST",
+      body: JSON.stringify(body)
+    }),
+
+  adminSchoolEvents: (
+    schoolId: number,
+    params?: { page?: number; page_size?: number; event_type?: string }
+  ) => {
+    const search = new URLSearchParams();
+    if (params?.page) search.set("page", String(params.page));
+    if (params?.page_size) search.set("page_size", String(params.page_size));
+    if (params?.event_type) search.set("event_type", params.event_type);
+    const qs = search.toString();
+    return requestJson<AdminEventsPage>(`/admin/schools/${schoolId}/events${qs ? `?${qs}` : ""}`);
+  },
+
+  adminExtendTrial: (schoolId: number, days: number) =>
+    requestJson<AdminSchoolListItem>(`/admin/schools/${schoolId}/actions/extend-trial`, {
+      method: "POST",
+      body: JSON.stringify({ days })
+    }),
+
+  adminActivatePro: (
+    schoolId: number,
+    body: { until: string; amount_kzt?: number; period_label?: string }
+  ) =>
+    requestJson<AdminSchoolListItem>(`/admin/schools/${schoolId}/actions/activate-pro`, {
+      method: "POST",
+      body: JSON.stringify(body)
+    })
 };

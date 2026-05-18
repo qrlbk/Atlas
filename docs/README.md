@@ -15,6 +15,20 @@
 | [**Локализация**](i18n.md) | kk / ru / en |
 | [**Разработка**](development.md) | Тесты, CI, структура репозитория |
 | [**Развёртывание**](deployment.md) | Production и Nginx |
+| [**ТЗ: Admin Console**](admin-console-spec.md) | Внутренняя панель управления (тарифы, школы, support) |
+
+## Тарифы (Free / Pro)
+
+| | **Atlas Free** | **Atlas Pro** |
+|---|----------------|---------------|
+| Ручное расписание + validation | да | да |
+| Готовность школы (GREEN/YELLOW/RED) | да | да |
+| Простой PDF | да | да |
+| Solver / CP-SAT | trial 14 дней | да |
+| Сценарии, полный экспорт | — | да |
+| Импорт листа Schedule | — | да |
+
+Оплата v1: счёт / Kaspi → admin выставляет `plan=pro` через `PATCH /schools/{id}`.
 
 ## Ключевые понятия
 

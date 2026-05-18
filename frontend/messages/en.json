@@ -38,6 +38,11 @@
       "school": "School #{schoolId}",
       "session": "Session #{refreshKey}"
     },
+    "start": {
+      "title": "Welcome to Atlas",
+      "subtitle": "Import your school data in a few minutes.",
+      "loading": "Checking setup…"
+    },
     "curriculum": {
       "title": "Curriculum plan",
       "subtitle": "Weekly hours per class and subject — feeds validation and draft generation.",
@@ -161,14 +166,66 @@
     "qualityErrors": "Errors:",
     "qualityWarnings": "Warnings:",
     "qualityIssues": "Issues total:",
-    "readonlyTitle": "Read-only notice",
-    "readonlySubtitle": "Dashboard is informational only. Use dedicated pages for editing schedule, teachers, classrooms, classes, and flows.",
     "planCoverageTitle": "Curriculum vs timetable",
     "planCoverageSubtitle": "How well the saved schedule matches weekly plan hours.",
     "planCoverageLine": "{fill}% filled — {rows} plan row(s), {missing} class(es) with no curriculum rows.",
     "planCoverageUnderOver": "Under-filled rows: {under}. Over-filled rows: {over}.",
     "planCoverageUnavailable": "Plan coverage could not be loaded.",
-    "planCoverageCta": "Open curriculum page"
+    "planCoverageCta": "Open curriculum page",
+    "healthTitle": "School readiness",
+    "healthSubtitle": "Can this timetable be published?",
+    "healthUnavailable": "Readiness could not be loaded.",
+    "healthCta": "Open schedule editor",
+    "healthStatus": {
+      "green": "Ready to publish",
+      "yellow": "Risks remain",
+      "red": "Cannot publish yet",
+      "unknown": "Get started"
+    }
+  },
+  "onboarding": {
+    "title": "Get started",
+    "subtitle": "Upload your school Excel file — we will set up teachers, classes, and curriculum.",
+    "stepUpload": "Upload",
+    "stepPreview": "Preview",
+    "stepStart": "Build schedule",
+    "validate": "Check file",
+    "validating": "Checking…",
+    "previewTitle": "We found in your file",
+    "countTeachers": "{count} teachers",
+    "countClasses": "{count} classes",
+    "countCurriculum": "{count} curriculum rows",
+    "issueSummary": "{total} issues — {review} need your review",
+    "fixErrorsFirst": "Fix errors in the file before importing.",
+    "startBuilding": "Start building schedule",
+    "committing": "Importing…",
+    "validateFailed": "Could not read the file.",
+    "commitFailed": "Import failed.",
+    "commitBlocked": "Import blocked due to errors.",
+    "manualSetup": "Set up manually"
+  },
+  "upgrade": {
+    "title": "Atlas Pro",
+    "subtitle": "Remove 80% of routine work — auto-build drafts, scenarios, and full exports.",
+    "capability": "Requires: {capability}",
+    "ctaPricing": "See pricing",
+    "dismiss": "Not now"
+  },
+  "pricing": {
+    "title": "Atlas pricing",
+    "subtitle": "One price per school per academic year.",
+    "freeTitle": "Atlas Free",
+    "freeDesc": "Manual editing with live conflict checks.",
+    "freeManual": "Drag-and-drop timetable",
+    "freeValidation": "Conflict and plan coverage checks",
+    "freePdf": "Simple school PDF export",
+    "proTitle": "Atlas Pro",
+    "proDesc": "For schools that need to finish before September.",
+    "proSolver": "CP-SAT and draft generation",
+    "proScenarios": "Absence and shortened-day scenarios",
+    "proExport": "Full XLSX/PDF exports",
+    "proPrice": "From 150 000 ₸ / school / year",
+    "contact": "Contact admin@atlas.example.com for invoice or trial."
   },
   "analytics": {
     "loadError": "Failed to load analytics.",
@@ -413,12 +470,18 @@
     "solverEmptyNoCurriculum": "No curriculum (hours per subject) is configured for this class.",
     "solverEmptyNoGaps": "Plan hours are already in the database — there is nothing to add.",
     "solverFailed": "Solver failed: {reason}",
+    "toolsPanelLabel": "Schedule generation and draft tools",
+    "toolbarGroupEdit": "Selected slot",
+    "toolbarGroupDraft": "Draft & scenarios",
+    "toolbarGroupSolver": "Solver",
+    "toolbarGroupSandbox": "What-if",
     "solverScopeLabel": "Generation scope",
     "scopeClass": "Selected class",
     "scopeSchool": "Whole school",
     "confirmSolverRun": "Generate for «{scope}»? Plan rows still under target: {under}. (Fills missing hours only — does not move existing lessons.)",
     "solverSchoolSaved": "{strategy}: whole school saved to database — {count} operations (+{created} / ~{updated}). Switch class in the picker to review each grid.",
     "solverClassDraftHint": "Applied to local draft — click Save changes to persist.",
+    "solverSchoolDraftHint": "Whole-school draft: switch class in the picker to review each grid. Save changes writes all classes to the database.",
     "solverPersistFailed": "Solver finished but saving to the database failed. Try again.",
     "fillGapsHint": "Adds only missing plan hours (does not rebuild the full timetable).",
     "fromPlanHint": "Clears the scope and rebuilds the full timetable from the curriculum plan.",
@@ -447,6 +510,16 @@
     "exportTeacherXlsx": "Teacher XLSX",
     "exportTeacherPdf": "Teacher PDF",
     "exportSchoolXlsx": "School XLSX",
+    "publish": "Publish",
+    "history": "History",
+    "historyTitle": "Schedule snapshots",
+    "restore": "Restore",
+    "close": "Close",
+    "publishDone": "Schedule published.",
+    "publishFailed": "Could not publish — fix critical issues first.",
+    "historyFailed": "Could not load history.",
+    "restoreDone": "Schedule restored from snapshot.",
+    "restoreFailed": "Restore failed.",
     "errors": "Errors: {value}",
     "warnings": "Warnings: {value}",
     "valid": "Valid: {value}",
@@ -498,15 +571,48 @@
     "gridHint": "Drag from the pool into a cell. Colors show validation for that slot.",
     "validationHint": "Checks run across the whole school while you edit."
   },
-  "schedulingPrefs": {
-    "title": "Scheduling preferences",
-    "hint": "JSON: plan_compliance, issue_weights, event blocks",
-    "editorLabel": "scheduling_preferences JSON",
-    "save": "Save preferences",
-    "saved": "Preferences saved.",
-    "saveFailed": "Could not save preferences.",
-    "loadFailed": "Could not load school preferences.",
-    "invalidJson": "Invalid JSON.",
-    "loading": "Loading…"
+  "admin": {
+    "title": "Admin Console",
+    "forbidden": "Access denied. Admin role required.",
+    "loading": "Loading…",
+    "nav": { "dashboard": "Dashboard", "schools": "Schools", "logout": "Logout" },
+    "dashboard": {
+      "title": "Overview",
+      "totalSchools": "Total schools",
+      "free": "Free",
+      "pro": "Pro",
+      "trialActive": "Active trial",
+      "readinessRed": "Health RED",
+      "events24h": "Events (24h)",
+      "attention": "Needs attention",
+      "noAttention": "No schools at risk",
+      "allSchools": "All schools",
+      "createSchool": "Create school"
+    },
+    "schools": {
+      "title": "Schools",
+      "search": "Search by name",
+      "filterPlan": "Plan",
+      "filterHealth": "Health",
+      "all": "All",
+      "create": "Create school",
+      "empty": "No schools found"
+    },
+    "school": {
+      "back": "Back to list",
+      "billing": "Plan & billing",
+      "health": "Health",
+      "users": "Users",
+      "events": "Events",
+      "save": "Save",
+      "extendTrial": "+14 trial",
+      "activateProYear": "Pro (1 year)"
+    },
+    "create": {
+      "title": "New school",
+      "submit": "Create",
+      "passwordWarning": "Password is shown once only."
+    },
+    "health": { "green": "Green", "yellow": "Yellow", "red": "Red", "unknown": "Unknown" }
   }
 }

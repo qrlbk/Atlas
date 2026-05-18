@@ -47,7 +47,10 @@ from app.services.school_integrity import (
     assert_schedule_payload_consistent,
     ensure_payload_school_id_matches_entity,
 )
+from app.services.entitlements import require_capability
+from app.services.plan_status import compute_schedule_plan_status
 from app.services.schedule_exports import build_schedule_export
+from app.services.school_readiness import invalidate_readiness_cache
 
 
 router = APIRouter()
@@ -78,6 +81,19 @@ def patch_school(
         raise HTTPException(status_code=404, detail={"key": "errors.requestValidation"})
     if payload.scheduling_preferences is not None:
         school.scheduling_preferences = payload.scheduling_preferences
+    if current_user.role == UserRole.admin:
+        if payload.plan is not None:
+            from app.models.entities import SchoolPlan
+
+            school.plan = SchoolPlan(payload.plan)
+        if payload.trial_ends_at is not None:
+            from datetime import datetime
+
+            school.trial_ends_at = datetime.fromisoformat(payload.trial_ends_at.replace("Z", ""))
+        if payload.subscription_ends_at is not None:
+            from datetime import datetime
+
+            school.subscription_ends_at = datetime.fromisoformat(payload.subscription_ends_at.replace("Z", ""))
     db.commit()
     db.refresh(school)
     return school
@@ -416,80 +432,12 @@ def schedule_plan_status(
 ):
     """Planned vs actual lesson counts per curriculum row; classes with no plan rows."""
     enforce_school_scope(current_user, school_id)
-    plan_rows = list(
-        db.scalars(
-            select(ClassSubjectHours).where(ClassSubjectHours.school_id == school_id).order_by(ClassSubjectHours.id)
-        )
+    data = compute_schedule_plan_status(db, school_id)
+    return SchedulePlanStatusOut(
+        rows=data.rows_out,
+        classes_without_plan=data.classes_without_plan,
+        summary=data.summary,
     )
-    student_classes = list(db.scalars(select(StudentClass).where(StudentClass.school_id == school_id)))
-    class_names = {c.id: c.class_name for c in student_classes}
-    subject_names = {s.id: s.name for s in db.scalars(select(Subject))}
-
-    count_rows = db.execute(
-        select(ScheduleItem.class_id, ScheduleItem.subject_id, func.count(ScheduleItem.id))
-        .where(ScheduleItem.school_id == school_id)
-        .group_by(ScheduleItem.class_id, ScheduleItem.subject_id)
-    ).all()
-    counts: dict[tuple[int, int], int] = {(int(r[0]), int(r[1])): int(r[2]) for r in count_rows}
-
-    rows_out: list[PlanRowCoverageOut] = []
-    rows_under = 0
-    rows_over = 0
-    rows_exact = 0
-    total_planned = 0
-    total_matched = 0
-    total_scheduled_on_plan = 0
-
-    for plan in plan_rows:
-        scheduled = counts.get((plan.class_id, plan.subject_id), 0)
-        planned = plan.hours_per_week
-        delta = scheduled - planned
-        under = scheduled < planned
-        over = scheduled > planned
-        if under:
-            rows_under += 1
-        elif over:
-            rows_over += 1
-        else:
-            rows_exact += 1
-        total_planned += planned
-        total_scheduled_on_plan += scheduled
-        total_matched += min(scheduled, planned)
-        rows_out.append(
-            PlanRowCoverageOut(
-                plan_id=plan.id,
-                class_id=plan.class_id,
-                subject_id=plan.subject_id,
-                class_name=class_names.get(plan.class_id, ""),
-                subject_name=subject_names.get(plan.subject_id, ""),
-                planned_hours=planned,
-                scheduled_hours=scheduled,
-                delta=delta,
-                under=under,
-                over=over,
-            )
-        )
-
-    classes_with_plan = {p.class_id for p in plan_rows}
-    without_plan = [
-        ClassWithoutPlanOut(class_id=c.id, class_name=c.class_name)
-        for c in student_classes
-        if c.id not in classes_with_plan
-    ]
-
-    fill_rate = 1.0 if total_planned <= 0 else round(total_matched / total_planned, 4)
-
-    summary = SchedulePlanSummaryOut(
-        plan_row_count=len(plan_rows),
-        total_planned_hours=total_planned,
-        total_scheduled_hours=total_scheduled_on_plan,
-        rows_under=rows_under,
-        rows_over=rows_over,
-        rows_exact=rows_exact,
-        classes_without_plan_count=len(without_plan),
-        fill_rate=fill_rate,
-    )
-    return SchedulePlanStatusOut(rows=rows_out, classes_without_plan=without_plan, summary=summary)
 
 
 @router.get("/schedule", response_model=list[ScheduleItemOut])
@@ -513,6 +461,7 @@ def create_schedule_item(
     db.add(item)
     db.commit()
     db.refresh(item)
+    invalidate_readiness_cache(payload.school_id)
     return item
 
 
@@ -534,6 +483,7 @@ def update_schedule_item(
         setattr(item, key, value)
     db.commit()
     db.refresh(item)
+    invalidate_readiness_cache(item.school_id)
     return item
 
 
@@ -550,6 +500,7 @@ def delete_schedule_item(
     enforce_school_scope(current_user, item.school_id)
     db.delete(item)
     db.commit()
+    invalidate_readiness_cache(item.school_id)
     return {"ok": True}
 
 
@@ -559,10 +510,25 @@ def export_schedule(
     view: str = "class",
     format: str = "xlsx",
     entity_id: int | None = None,
+    simple: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     enforce_school_scope(current_user, school_id)
+    school = db.get(School, school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail={"key": "errors.requestValidation"})
+    if format == "xlsx":
+        require_capability(db, school, "export_xlsx")
+    elif format == "pdf":
+        from app.services.entitlements import has_pro_access
+
+        if not has_pro_access(school) and not simple:
+            require_capability(db, school, "export_pdf_full")
+        if not has_pro_access(school):
+            simple = True
+            view = "school"
+            entity_id = None
     if view not in {"class", "teacher", "school"}:
         raise HTTPException(status_code=400, detail={"key": "errors.requestValidation"})
     if format not in {"xlsx", "pdf"}:
@@ -574,6 +540,7 @@ def export_schedule(
             view=view,  # type: ignore[arg-type]
             fmt=format,  # type: ignore[arg-type]
             entity_id=entity_id,
+            simple=simple,
         )
     except ValueError:
         raise HTTPException(status_code=400, detail={"key": "errors.requestValidation"}) from None

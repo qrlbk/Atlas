@@ -20,6 +20,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.styles.colors import Color
 from openpyxl.utils import get_column_letter
+from openpyxl.workbook.defined_name import DefinedName
 from openpyxl.worksheet.datavalidation import DataValidation
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -73,9 +74,15 @@ SHEET_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     SHEET_TEACHERS: [
         ("full_name", "ФИО, уникально в школе · full name, unique per school"),
-        ("subjects", "Предметы через запятую (как в Subjects) · comma-separated subject names"),
+        ("subject_1", "Предмет 1 — выберите из списка (лист Subjects) · subject 1 from dropdown"),
+        ("subject_2", "Предмет 2 (необязательно) · optional subject 2"),
+        ("subject_3", "Предмет 3 (необязательно) · optional subject 3"),
+        ("subject_4", "Предмет 4 (необязательно) · optional subject 4"),
+        ("subject_5", "Предмет 5 (необязательно) · optional subject 5"),
         ("weekly_load_limit", "Макс. часов в неделю, 0 = без лимита · max hours/week, 0 = no cap"),
-        ("unavailable_days", "Недоступные дни через запятую 1..7 · unavailable weekdays 1..7"),
+        ("unavailable_day_1", "Недоступный день 1..7 (необяз.) · optional weekday 1=Mon … 7=Sun"),
+        ("unavailable_day_2", "Второй недоступный день · optional second weekday"),
+        ("unavailable_day_3", "Третий недоступный день · optional third weekday"),
     ],
     SHEET_CLASSROOMS: [
         ("room_number", "Номер/название кабинета · room label, unique per school"),
@@ -84,7 +91,11 @@ SHEET_COLUMNS: dict[str, list[tuple[str, str]]] = {
     ],
     SHEET_GROUP_FLOWS: [
         ("group_name", "Название потока · flow name, unique per school"),
-        ("combined_classes", "Классы через запятую (как в Classes) · class_name values, comma-separated"),
+        ("class_1", "Класс 1 — выберите из списка (лист Classes) · class 1 from dropdown"),
+        ("class_2", "Класс 2 (необязательно) · optional class 2"),
+        ("class_3", "Класс 3 (необязательно) · optional class 3"),
+        ("class_4", "Класс 4 (необязательно) · optional class 4"),
+        ("class_5", "Класс 5 (необязательно) · optional class 5"),
     ],
     SHEET_CURRICULUM: [
         ("class_name", "Класс из листа Classes · class from Classes sheet"),
@@ -105,6 +116,20 @@ SHEET_COLUMNS: dict[str, list[tuple[str, str]]] = {
 
 
 SPECIALIZATIONS = {member.value for member in ClassroomSpecialization}
+
+# Data-entry grid: rows 4..TEMPLATE_LAST_ROW (row 3 is the green banner).
+_TEMPLATE_FIRST_ROW = 4
+_TEMPLATE_LAST_ROW = 503
+
+_WEEKDAY_LIST = '"1,2,3,4,5,6,7"'
+_LESSON_NUMBER_LIST = '"1,2,3,4,5,6,7,8,9,10,11,12"'
+
+# Named ranges for cross-sheet dropdowns (defined in build_template_workbook).
+_NAME_SUBJECTS = "AtlasSubjects"
+_NAME_CLASSES = "AtlasClasses"
+_NAME_TEACHERS = "AtlasTeachers"
+_NAME_CLASSROOMS = "AtlasClassrooms"
+_NAME_GROUP_FLOWS = "AtlasGroupFlows"
 
 # Template / workbook styling (hex without FF prefix for openpyxl PatternFill)
 _FILL_HEADER = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
@@ -291,11 +316,18 @@ def _read_sheet_rows(workbook: Workbook, sheet_name: str) -> tuple[list[str], li
     return headers, rows
 
 
-def _index_columns(headers: list[str], expected: list[tuple[str, str]]) -> dict[str, int]:
+def _index_columns(headers: list[str], expected: list[tuple[str, str]], *, legacy: tuple[str, ...] = ()) -> dict[str, int]:
     """Map expected column name -> position in the row (or missing)."""
 
     mapping: dict[str, int] = {}
     for column, _ in expected:
+        try:
+            mapping[column] = headers.index(column.lower())
+        except ValueError:
+            mapping[column] = -1
+    for column in legacy:
+        if mapping.get(column, -1) >= 0:
+            continue
         try:
             mapping[column] = headers.index(column.lower())
         except ValueError:
@@ -332,10 +364,60 @@ def _sheet_title_and_subtitle(sheet_name: str) -> tuple[str, str]:
     return ru, en
 
 
-def _apply_list_validation(ws, col_letter: str, formula1: str, first_row: int = 4, last_row: int = 5000) -> None:
-    dv = DataValidation(type="list", formula1=formula1, allow_blank=True)
-    dv.error = "Выберите значение из списка"
+def _column_letter(sheet_name: str, column_name: str) -> str:
+    for index, (name, _hint) in enumerate(SHEET_COLUMNS[sheet_name], start=1):
+        if name == column_name:
+            return get_column_letter(index)
+    raise KeyError(f"Column {column_name!r} not on sheet {sheet_name!r}")
+
+
+def _sheet_column_range(sheet_name: str, column_name: str, first_row: int = _TEMPLATE_FIRST_ROW, last_row: int = _TEMPLATE_LAST_ROW) -> str:
+    col = _column_letter(sheet_name, column_name)
+    return f"'{sheet_name}'!${col}${first_row}:${col}${last_row}"
+
+
+def _define_list_name(wb: Workbook, name: str, range_ref: str) -> None:
+    wb.defined_names.add(DefinedName(name, attr_text=range_ref))
+
+
+def _merge_csv_and_slots(
+    row: list[Any],
+    indexes: dict[str, int],
+    legacy_column: str,
+    slot_columns: tuple[str, ...],
+) -> list[str]:
+    values = _split_csv(_cell(row, indexes, legacy_column))
+    for column in slot_columns:
+        pos = indexes.get(column, -1)
+        if pos < 0:
+            continue
+        item = _coerce_str(_cell(row, indexes, column))
+        if item:
+            values.append(item)
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
+def _apply_list_validation(
+    ws,
+    col_letter: str,
+    formula1: str,
+    *,
+    first_row: int = _TEMPLATE_FIRST_ROW,
+    last_row: int = _TEMPLATE_LAST_ROW,
+    allow_blank: bool = True,
+) -> None:
+    dv = DataValidation(type="list", formula1=formula1, allow_blank=allow_blank)
+    dv.error = "Выберите значение из списка (заполните листы выше по порядку)."
     dv.errorTitle = "Неверное значение"
+    dv.errorStyle = "stop"
+    dv.showDropDown = True
     ws.add_data_validation(dv)
     dv.add(f"{col_letter}{first_row}:{col_letter}{last_row}")
 
@@ -394,12 +476,45 @@ def _style_data_sheet(ws, sheet_name: str, columns: list[tuple[str, str]]) -> No
     bool_formula = '"true,false"'
 
     if sheet_name == SHEET_SUBJECTS:
-        _apply_list_validation(ws, "B", bool_formula)
-        _apply_list_validation(ws, "C", f'"{spec_options}"')
+        _apply_list_validation(ws, _column_letter(sheet_name, "requires_special_room"), bool_formula)
+        _apply_list_validation(ws, _column_letter(sheet_name, "required_specialization"), f'"{spec_options}"')
+    elif sheet_name == SHEET_LESSON_SLOTS:
+        _apply_list_validation(ws, _column_letter(sheet_name, "day_of_week"), _WEEKDAY_LIST)
+        _apply_list_validation(ws, _column_letter(sheet_name, "lesson_number"), _LESSON_NUMBER_LIST)
+    elif sheet_name == SHEET_TEACHERS:
+        subj_ref = f"={_NAME_SUBJECTS}"
+        for col in ("subject_1", "subject_2", "subject_3", "subject_4", "subject_5"):
+            _apply_list_validation(ws, _column_letter(sheet_name, col), subj_ref)
+        for col in ("unavailable_day_1", "unavailable_day_2", "unavailable_day_3"):
+            _apply_list_validation(ws, _column_letter(sheet_name, col), _WEEKDAY_LIST)
     elif sheet_name == SHEET_CLASSROOMS:
-        _apply_list_validation(ws, "C", f'"{spec_options}"')
+        _apply_list_validation(ws, _column_letter(sheet_name, "specialization"), f'"{spec_options}"')
+    elif sheet_name == SHEET_GROUP_FLOWS:
+        class_ref = f"={_NAME_CLASSES}"
+        for col in ("class_1", "class_2", "class_3", "class_4", "class_5"):
+            _apply_list_validation(ws, _column_letter(sheet_name, col), class_ref)
+    elif sheet_name == SHEET_CURRICULUM:
+        _apply_list_validation(ws, _column_letter(sheet_name, "class_name"), f"={_NAME_CLASSES}")
+        _apply_list_validation(ws, _column_letter(sheet_name, "subject_name"), f"={_NAME_SUBJECTS}")
     elif sheet_name == SHEET_SCHEDULE:
-        _apply_list_validation(ws, "G", bool_formula)
+        _apply_list_validation(ws, _column_letter(sheet_name, "class_name"), f"={_NAME_CLASSES}")
+        _apply_list_validation(ws, _column_letter(sheet_name, "subject_name"), f"={_NAME_SUBJECTS}")
+        _apply_list_validation(ws, _column_letter(sheet_name, "teacher_full_name"), f"={_NAME_TEACHERS}")
+        _apply_list_validation(ws, _column_letter(sheet_name, "room_number"), f"={_NAME_CLASSROOMS}")
+        _apply_list_validation(ws, _column_letter(sheet_name, "day_of_week"), _WEEKDAY_LIST)
+        _apply_list_validation(ws, _column_letter(sheet_name, "lesson_number"), _LESSON_NUMBER_LIST)
+        _apply_list_validation(ws, _column_letter(sheet_name, "is_grouped"), bool_formula)
+        _apply_list_validation(ws, _column_letter(sheet_name, "group_name"), f"={_NAME_GROUP_FLOWS}")
+
+
+def _apply_workbook_list_names(wb: Workbook) -> None:
+    """Named ranges pointing at natural-key columns — used by dependent-sheet dropdowns."""
+
+    _define_list_name(wb, _NAME_SUBJECTS, _sheet_column_range(SHEET_SUBJECTS, "name"))
+    _define_list_name(wb, _NAME_CLASSES, _sheet_column_range(SHEET_CLASSES, "class_name"))
+    _define_list_name(wb, _NAME_TEACHERS, _sheet_column_range(SHEET_TEACHERS, "full_name"))
+    _define_list_name(wb, _NAME_CLASSROOMS, _sheet_column_range(SHEET_CLASSROOMS, "room_number"))
+    _define_list_name(wb, _NAME_GROUP_FLOWS, _sheet_column_range(SHEET_GROUP_FLOWS, "group_name"))
 
 
 def _build_readme_sheet(ws) -> None:
@@ -430,8 +545,9 @@ def _build_readme_sheet(ws) -> None:
             "Советы · Tips",
             "• Время: формат ЧЧ:ММ (например 08:30).\n"
             "• Дни недели: 1 = понедельник … 7 = воскресенье.\n"
-            "• Списки: в колонках true/false и specialization есть выпадающий список.\n"
-            "• Имена предметов/классов/учителей должны совпадать между листами.",
+            "• Заполняйте листы строго по порядку — в следующих листах появятся выпадающие списки.\n"
+            "• Предметы, классы, учителя, кабинеты — только из списка (нельзя ввести с опечаткой).\n"
+            "• Учитель: до 5 предметов в колонках subject_1…subject_5. Поток: до 5 классов class_1…class_5.",
         ),
         (
             "Листы · Sheets",
@@ -510,6 +626,8 @@ def build_template_workbook() -> bytes:
             ws.cell(row=1, column=col_index, value=name)
             ws.cell(row=2, column=col_index, value=f"# {hint}")
         _style_data_sheet(ws, sheet_name, columns)
+
+    _apply_workbook_list_names(wb)
 
     buffer = io.BytesIO()
     wb.save(buffer)
@@ -684,7 +802,7 @@ def _parse_classes(ctx: _SchoolContext, rows: list[tuple[int, list[Any]]], heade
 
 def _parse_teachers(ctx: _SchoolContext, rows: list[tuple[int, list[Any]]], headers: list[str], issues: list[ImportIssue]) -> SheetPlan:
     plan = SheetPlan(sheet=SHEET_TEACHERS, rows_total=len(rows))
-    indexes = _index_columns(headers, SHEET_COLUMNS[SHEET_TEACHERS])
+    indexes = _index_columns(headers, SHEET_COLUMNS[SHEET_TEACHERS], legacy=("subjects", "unavailable_days"))
     if indexes["full_name"] < 0:
         issues.append(ImportIssue(sheet=SHEET_TEACHERS, severity=IssueSeverity.error, code="missing_column", message="Required column: full_name"))
         return plan
@@ -701,19 +819,52 @@ def _parse_teachers(ctx: _SchoolContext, rows: list[tuple[int, list[Any]]], head
             plan.rows_with_errors += 1
             continue
         seen.add(full_name)
-        subjects = _split_csv(_cell(row, indexes, "subjects"))
+        subjects = _merge_csv_and_slots(
+            row,
+            indexes,
+            "subjects",
+            ("subject_1", "subject_2", "subject_3", "subject_4", "subject_5"),
+        )
         weekly_limit = _coerce_int(_cell(row, indexes, "weekly_load_limit")) or 0
-        days_raw = _split_csv(_cell(row, indexes, "unavailable_days"))
+        days_raw = _merge_csv_and_slots(
+            row,
+            indexes,
+            "unavailable_days",
+            ("unavailable_day_1", "unavailable_day_2", "unavailable_day_3"),
+        )
         unavailable_days: list[int] = []
+        subject_bad = False
+        for subj in subjects:
+            if subj not in known_subjects:
+                issues.append(
+                    ImportIssue(
+                        sheet=SHEET_TEACHERS,
+                        row=excel_row,
+                        column="subject_1",
+                        severity=IssueSeverity.error,
+                        code="unknown_subject",
+                        message=f"Subject '{subj}' is not on the Subjects sheet — pick from the dropdown list",
+                    )
+                )
+                subject_bad = True
         for raw in days_raw:
             value = _coerce_int(raw)
             if value is None or not (1 <= value <= 7):
-                issues.append(ImportIssue(sheet=SHEET_TEACHERS, row=excel_row, column="unavailable_days", severity=IssueSeverity.warning, code="invalid_day", message=f"Skipping invalid day '{raw}'"))
+                issues.append(
+                    ImportIssue(
+                        sheet=SHEET_TEACHERS,
+                        row=excel_row,
+                        column="unavailable_day_1",
+                        severity=IssueSeverity.warning,
+                        code="invalid_day",
+                        message=f"Skipping invalid day '{raw}'",
+                    )
+                )
                 continue
             unavailable_days.append(value)
-        for subj in subjects:
-            if subj not in known_subjects:
-                issues.append(ImportIssue(sheet=SHEET_TEACHERS, row=excel_row, column="subjects", severity=IssueSeverity.warning, code="unknown_subject", message=f"Subject '{subj}' is not in Subjects sheet or DB; teacher will keep the label"))
+        if subject_bad:
+            plan.rows_with_errors += 1
+            continue
         payload = {
             "full_name": full_name,
             "subjects": subjects,
@@ -768,21 +919,35 @@ def _parse_classrooms(ctx: _SchoolContext, rows: list[tuple[int, list[Any]]], he
 
 def _parse_group_flows(ctx: _SchoolContext, rows: list[tuple[int, list[Any]]], headers: list[str], issues: list[ImportIssue]) -> SheetPlan:
     plan = SheetPlan(sheet=SHEET_GROUP_FLOWS, rows_total=len(rows))
-    indexes = _index_columns(headers, SHEET_COLUMNS[SHEET_GROUP_FLOWS])
-    if indexes["group_name"] < 0 or indexes["combined_classes"] < 0:
-        issues.append(ImportIssue(sheet=SHEET_GROUP_FLOWS, severity=IssueSeverity.error, code="missing_column", message="Required columns: group_name, combined_classes"))
+    indexes = _index_columns(headers, SHEET_COLUMNS[SHEET_GROUP_FLOWS], legacy=("combined_classes",))
+    has_class_slots = indexes.get("class_1", -1) >= 0
+    has_legacy_classes = indexes.get("combined_classes", -1) >= 0
+    if indexes["group_name"] < 0 or (not has_class_slots and not has_legacy_classes):
+        issues.append(
+            ImportIssue(
+                sheet=SHEET_GROUP_FLOWS,
+                severity=IssueSeverity.error,
+                code="missing_column",
+                message="Required columns: group_name and class_1 (or legacy combined_classes)",
+            )
+        )
         return plan
     known_classes = set(ctx.classes.keys()) | ctx.pending_classes
     seen: set[str] = set()
     for excel_row, row in rows:
         name = _coerce_str(_cell(row, indexes, "group_name"))
-        members = _split_csv(_cell(row, indexes, "combined_classes"))
+        members = _merge_csv_and_slots(
+            row,
+            indexes,
+            "combined_classes",
+            ("class_1", "class_2", "class_3", "class_4", "class_5"),
+        )
         if not name:
             issues.append(ImportIssue(sheet=SHEET_GROUP_FLOWS, row=excel_row, column="group_name", severity=IssueSeverity.error, code="required", message="group_name is required"))
             plan.rows_with_errors += 1
             continue
         if not members:
-            issues.append(ImportIssue(sheet=SHEET_GROUP_FLOWS, row=excel_row, column="combined_classes", severity=IssueSeverity.error, code="required", message="combined_classes must list at least one class_name"))
+            issues.append(ImportIssue(sheet=SHEET_GROUP_FLOWS, row=excel_row, column="class_1", severity=IssueSeverity.error, code="required", message="At least one class is required (class_1)"))
             plan.rows_with_errors += 1
             continue
         if name in seen:
@@ -793,7 +958,16 @@ def _parse_group_flows(ctx: _SchoolContext, rows: list[tuple[int, list[Any]]], h
         bad = False
         for member in members:
             if member not in known_classes:
-                issues.append(ImportIssue(sheet=SHEET_GROUP_FLOWS, row=excel_row, column="combined_classes", severity=IssueSeverity.error, code="unknown_class", message=f"Class '{member}' is not defined for this school"))
+                issues.append(
+                    ImportIssue(
+                        sheet=SHEET_GROUP_FLOWS,
+                        row=excel_row,
+                        column="class_1",
+                        severity=IssueSeverity.error,
+                        code="unknown_class",
+                        message=f"Class '{member}' is not on the Classes sheet — pick from the dropdown list",
+                    )
+                )
                 bad = True
         if bad:
             plan.rows_with_errors += 1

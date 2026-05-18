@@ -4,7 +4,19 @@ import { Fragment, ReactNode, useEffect, useMemo, useRef, useState } from "react
 import { DndProvider, useDrag, useDrop } from "react-dnd";
 import { HTML5Backend } from "react-dnd-html5-backend";
 import {useTranslations} from "next-intl";
-import { api, Classroom, hasAuthToken, ScheduleDraftOperation, ScheduleItem, Subject, Teacher, ValidationIssue } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  Classroom,
+  hasAuthToken,
+  ScheduleDraftOperation,
+  ScheduleItem,
+  ScheduleSnapshot,
+  Subject,
+  Teacher,
+  ValidationIssue
+} from "@/lib/api";
+import { UpgradePanel } from "@/components/UpgradePanel";
 import { filterGroupedJointBookingIssues } from "@/lib/scheduleValidation";
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri"];
@@ -42,6 +54,66 @@ function lessonSlotIdToSlotKey(lessonSlotId?: number | null): SlotKey | null {
   const day = Math.floor((lessonSlotId - 1) / 7) + 1;
   const lesson = ((lessonSlotId - 1) % 7) + 1;
   return `${Math.min(day, 5)}-${lesson}` as SlotKey;
+}
+
+function buildDraftCardsForClass(
+  classId: number,
+  items: ScheduleItem[],
+  subjects: Subject[],
+  teachers: Teacher[],
+  classrooms: Classroom[]
+): Record<SlotKey, LessonCard> {
+  const next: Record<SlotKey, LessonCard> = {};
+  for (const item of items) {
+    if (item.class_id !== classId) continue;
+    const slotKey = lessonSlotIdToSlotKey(item.lesson_slot_id);
+    if (!slotKey) continue;
+    next[slotKey] = hydrateCard(item, subjects, teachers, classrooms);
+  }
+  return next;
+}
+
+function mergeOperationsIntoDraft(
+  prev: Record<SlotKey, LessonCard>,
+  operations: ScheduleDraftOperation[],
+  subjects: Subject[],
+  teachers: Teacher[],
+  classrooms: Classroom[],
+  opts?: { onlyClassId?: number | null }
+): Record<SlotKey, LessonCard> {
+  const only = opts?.onlyClassId;
+  const next = { ...prev };
+  const byId = new Map<number, SlotKey>();
+  for (const [slot, card] of Object.entries(prev) as [SlotKey, LessonCard][]) {
+    if (card.lesson.id != null) byId.set(card.lesson.id, slot);
+  }
+  for (const operation of operations) {
+    if (operation.type === "create" && operation.payload) {
+      if (only != null && operation.payload.class_id !== only) continue;
+      const slotKey = lessonSlotIdToSlotKey(operation.payload.lesson_slot_id);
+      if (!slotKey || next[slotKey]) continue;
+      next[slotKey] = hydrateCard(operation.payload, subjects, teachers, classrooms);
+      continue;
+    }
+    if (operation.type === "delete") {
+      const slot = byId.get(operation.id);
+      if (!slot) continue;
+      if (only != null && prev[slot] && prev[slot].lesson.class_id !== only) continue;
+      delete next[slot];
+      continue;
+    }
+    if (operation.type === "update" && operation.payload) {
+      const slot = byId.get(operation.id);
+      if (!slot) continue;
+      if (only != null && operation.payload.class_id !== only) continue;
+      const payload = operation.payload;
+      const updated = hydrateCard({ ...payload, id: operation.id }, subjects, teachers, classrooms);
+      const target = lessonSlotIdToSlotKey(payload.lesson_slot_id) ?? slot;
+      if (target !== slot) delete next[slot];
+      next[target] = updated;
+    }
+  }
+  return next;
 }
 
 function withSlot(card: LessonCard, slotKey: SlotKey): LessonCard {
@@ -642,6 +714,9 @@ export function ScheduleBuilder({
   const [teachersCatalog, setTeachersCatalog] = useState<Teacher[]>([]);
   const [classroomsCatalog, setClassroomsCatalog] = useState<Classroom[]>([]);
   const [suggestLoading, setSuggestLoading] = useState(false);
+  const [upgradeCapability, setUpgradeCapability] = useState<string | null>(null);
+  const [snapshots, setSnapshots] = useState<ScheduleSnapshot[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const [fillFromPlanLoading, setFillFromPlanLoading] = useState(false);
   const [showWholeSchoolIssues, setShowWholeSchoolIssues] = useState(false);
   const [scenarioLoading, setScenarioLoading] = useState(false);
@@ -655,6 +730,7 @@ export function ScheduleBuilder({
   const [sandboxSnapshots, setSandboxSnapshots] = useState<SandboxSnapshot[]>([]);
   const [sandboxComparePenalty, setSandboxComparePenalty] = useState<number | null>(null);
   const slotRefs = useRef<Partial<Record<SlotKey, HTMLDivElement | null>>>({});
+  const schoolPendingOperationsRef = useRef<ScheduleDraftOperation[] | null>(null);
 
   useEffect(() => {
     setShowWholeSchoolIssues(false);
@@ -728,19 +804,19 @@ export function ScheduleBuilder({
         setSubjectsCatalog(subjects);
         setTeachersCatalog(teachers);
         setClassroomsCatalog(classrooms);
-        const next: Record<SlotKey, LessonCard> = {};
-        items
-          .filter((item) => item.class_id === selectedClassId)
-          .forEach((item) => {
-          const slot = `${Math.ceil(item.lesson_slot_id / 7)}-${((item.lesson_slot_id - 1) % 7) + 1}` as SlotKey;
-          next[slot] = hydrateCard(item, subjects, teachers, classrooms);
-        });
-        setServerSnapshot(next);
+        let next = buildDraftCardsForClass(selectedClassId, items, subjects, teachers, classrooms);
+        const pendingSchool = schoolPendingOperationsRef.current;
+        if (pendingSchool?.length) {
+          next = mergeOperationsIntoDraft(next, pendingSchool, subjects, teachers, classrooms, {
+            onlyClassId: selectedClassId
+          });
+        }
+        setServerSnapshot(buildDraftCardsForClass(selectedClassId, items, subjects, teachers, classrooms));
         setDraftCards(next);
         setBasePool(makePool(subjects, teachers, classrooms, schoolId, selectedClassId));
         setSubjectFilters(new Set());
         setHistory([]);
-        setSaveStatus("saved");
+        setSaveStatus(pendingSchool?.length ? "dirty" : "saved");
         setSaveMessage(null);
       })
       .catch(() => {
@@ -915,21 +991,18 @@ export function ScheduleBuilder({
         if (card.lesson.id) draftById.set(card.lesson.id, card);
       });
 
-      const operations: ScheduleDraftOperation[] = [];
-      for (const [id] of snapshotById) {
-        if (!draftById.has(id)) operations.push({ type: "delete", id });
+      let created = 0;
+      let updated = 0;
+      let deleted = 0;
+
+      const pendingSchool = schoolPendingOperationsRef.current;
+      if (pendingSchool?.length) {
+        const schoolResult = await api.applyScheduleDraft(pendingSchool);
+        created += schoolResult.created;
+        updated += schoolResult.updated;
+        deleted += schoolResult.deleted;
+        schoolPendingOperationsRef.current = null;
       }
-      for (const [id, draftCard] of draftById) {
-        const snap = snapshotById.get(id);
-        if (!snap) continue;
-        if (!sameLesson(snap.lesson, draftCard.lesson)) {
-          operations.push({ type: "update", id, payload: { ...draftCard.lesson, id: undefined } });
-        }
-      }
-      for (const draftCard of Object.values(draftCards)) {
-        if (!draftCard.lesson.id) operations.push({ type: "create", payload: draftCard.lesson });
-      }
-      const result = await api.applyScheduleDraft(operations);
 
       const [items, subjects, teachers, classrooms] = await Promise.all([
         api.listSchedule(schoolId),
@@ -940,17 +1013,38 @@ export function ScheduleBuilder({
       setSubjectsCatalog(subjects);
       setTeachersCatalog(teachers);
       setClassroomsCatalog(classrooms);
-      const refreshed: Record<SlotKey, LessonCard> = {};
-      items
-        .filter((item) => item.class_id === selectedClassId)
-        .forEach((item) => {
-        const slot = `${Math.ceil(item.lesson_slot_id / 7)}-${((item.lesson_slot_id - 1) % 7) + 1}` as SlotKey;
-        refreshed[slot] = hydrateCard(item, subjects, teachers, classrooms);
+      const freshBase = buildDraftCardsForClass(selectedClassId, items, subjects, teachers, classrooms);
+
+      const freshById = new Map<number, LessonCard>();
+      Object.values(freshBase).forEach((card) => {
+        if (card.lesson.id) freshById.set(card.lesson.id, card);
       });
+      const classOperations: ScheduleDraftOperation[] = [];
+      for (const [id] of freshById) {
+        if (!draftById.has(id)) classOperations.push({ type: "delete", id });
+      }
+      for (const [id, draftCard] of draftById) {
+        const snap = freshById.get(id);
+        if (!snap) continue;
+        if (!sameLesson(snap.lesson, draftCard.lesson)) {
+          classOperations.push({ type: "update", id, payload: { ...draftCard.lesson, id: undefined } });
+        }
+      }
+      for (const draftCard of Object.values(draftCards)) {
+        if (!draftCard.lesson.id) classOperations.push({ type: "create", payload: draftCard.lesson });
+      }
+      if (classOperations.length > 0) {
+        const classResult = await api.applyScheduleDraft(classOperations);
+        created += classResult.created;
+        updated += classResult.updated;
+        deleted += classResult.deleted;
+      }
+
+      const refreshed = buildDraftCardsForClass(selectedClassId, items, subjects, teachers, classrooms);
       setServerSnapshot(refreshed);
       setDraftCards(refreshed);
       setSaveStatus("saved");
-      setSaveMessage(t("savedDiff", {created: result.created, updated: result.updated, deleted: result.deleted}));
+      setSaveMessage(t("savedDiff", { created, updated, deleted }));
       setEditingSlot(null);
     } catch {
       setSaveStatus("error");
@@ -959,6 +1053,7 @@ export function ScheduleBuilder({
   }
 
   function resetDraft() {
+    schoolPendingOperationsRef.current = null;
     setHistory((prev) => [...prev.slice(-19), { draftCards }]);
     setDraftCards(serverSnapshot);
     setSelectedSlot(null);
@@ -1110,42 +1205,11 @@ export function ScheduleBuilder({
   }
 
   function applyOperationsLocally(operations: ScheduleDraftOperation[], opts?: { onlyClassId?: number | null }) {
-    const only = opts?.onlyClassId;
     setHistory((prev) => [...prev.slice(-19), { draftCards }]);
-    setDraftCards((prev) => {
-      const next = { ...prev };
-      const byId = new Map<number, SlotKey>();
-      for (const [slot, card] of Object.entries(prev) as [SlotKey, LessonCard][]) {
-        if (card.lesson.id != null) byId.set(card.lesson.id, slot);
-      }
-      for (const operation of operations) {
-        if (operation.type === "create" && operation.payload) {
-          if (only != null && operation.payload.class_id !== only) continue;
-          const slotKey = lessonSlotIdToSlotKey(operation.payload.lesson_slot_id);
-          if (!slotKey || next[slotKey]) continue;
-          next[slotKey] = hydrateCard(operation.payload, subjectsCatalog, teachersCatalog, classroomsCatalog);
-          continue;
-        }
-        if (operation.type === "delete") {
-          const slot = byId.get(operation.id);
-          if (!slot) continue;
-          if (only != null && prev[slot] && prev[slot].lesson.class_id !== only) continue;
-          delete next[slot];
-          continue;
-        }
-        if (operation.type === "update" && operation.payload) {
-          const slot = byId.get(operation.id);
-          if (!slot) continue;
-          if (only != null && operation.payload.class_id !== only) continue;
-          const payload = operation.payload;
-          const updated = hydrateCard({ ...payload, id: operation.id }, subjectsCatalog, teachersCatalog, classroomsCatalog);
-          const target = lessonSlotIdToSlotKey(payload.lesson_slot_id) ?? slot;
-          if (target !== slot) delete next[slot];
-          next[target] = updated;
-        }
-      }
-      return next;
-    });
+    setDraftCards((prev) =>
+      mergeOperationsIntoDraft(prev, operations, subjectsCatalog, teachersCatalog, classroomsCatalog, opts)
+    );
+    setSaveStatus("dirty");
   }
 
   async function runShortenedDayScenario() {
@@ -1209,16 +1273,20 @@ export function ScheduleBuilder({
       api.listTeachers(schoolId),
       api.listClassrooms(schoolId)
     ]);
-    const next: Record<SlotKey, LessonCard> = {};
-    items
-      .filter((item) => item.class_id === selectedClassId)
-      .forEach((item) => {
-        const slot = `${Math.ceil(item.lesson_slot_id / 7)}-${((item.lesson_slot_id - 1) % 7) + 1}` as SlotKey;
-        next[slot] = hydrateCard(item, subjects, teachers, classrooms);
-      });
-    setServerSnapshot(next);
+    setSubjectsCatalog(subjects);
+    setTeachersCatalog(teachers);
+    setClassroomsCatalog(classrooms);
+    const base = buildDraftCardsForClass(selectedClassId, items, subjects, teachers, classrooms);
+    const pendingSchool = schoolPendingOperationsRef.current;
+    const next =
+      pendingSchool?.length ?
+        mergeOperationsIntoDraft(base, pendingSchool, subjects, teachers, classrooms, {
+          onlyClassId: selectedClassId
+        })
+      : base;
+    setServerSnapshot(base);
     setDraftCards(next);
-    setSaveStatus("saved");
+    setSaveStatus(pendingSchool?.length ? "dirty" : "saved");
   }
 
   function toggleFrozenForSelectedSlot() {
@@ -1303,6 +1371,7 @@ export function ScheduleBuilder({
     setSolverRunning(true);
     setSolverPollHint(null);
     setSaveMessage(null);
+    setUpgradeCapability(null);
     try {
       const created = await api.createSolverJob({
         school_id: schoolId,
@@ -1337,15 +1406,23 @@ export function ScheduleBuilder({
                     .join("; ")
                 })}`
               : "";
+          const diagnosticsNote =
+            status.diagnostics && status.diagnostics.length > 0
+              ? ` ${status.diagnostics.map((d) => d.detail || d.title).join("; ")}`
+              : "";
 
           if (solverScope === "school") {
             if (count > 0 && schoolSolverDraftOnly) {
-              applyOperationsLocally(status.operations);
+              schoolPendingOperationsRef.current = status.operations;
+              await reloadDraftForSelectedClass();
+              setHistory([]);
+              const breakdownNote = breakdown ? ` ${t("solverBreakdown", { breakdown })}` : "";
               setSaveMessage(
-                `${t("solverApplied", { strategy: status.strategy, count: String(count) })}${unplacedNote} ${t("solverClassDraftHint")}`
+                `${t("solverApplied", { strategy: status.strategy, count: String(count) })}${breakdownNote}${unplacedNote}${diagnosticsNote} ${t("solverSchoolDraftHint")}`
               );
             } else if (count > 0) {
               try {
+                schoolPendingOperationsRef.current = null;
                 const persisted = await api.applyScheduleDraft(status.operations);
                 await reloadDraftForSelectedClass();
                 setHistory([]);
@@ -1363,6 +1440,7 @@ export function ScheduleBuilder({
                 setSaveMessage(t("solverPersistFailed"));
               }
             } else {
+              schoolPendingOperationsRef.current = null;
               if (opts?.regenerateMode === "from_plan") {
                 await reloadDraftForSelectedClass();
                 setHistory([]);
@@ -1378,6 +1456,7 @@ export function ScheduleBuilder({
               );
             }
           } else {
+            schoolPendingOperationsRef.current = null;
             applyOperationsLocally(status.operations);
             if (count === 0) {
               const hintParts = Array.from(new Set(status.issues ?? [])).map((code) => {
@@ -1404,11 +1483,45 @@ export function ScheduleBuilder({
         attempts += 1;
       }
       setSaveMessage(t("solverFailed", { reason: "timeout" }));
-    } catch {
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 402) {
+        setUpgradeCapability("solver");
+        return;
+      }
       setSaveMessage(t("solverFailed", { reason: "network" }));
     } finally {
       setSolverRunning(false);
       setSolverPollHint(null);
+    }
+  }
+
+  async function handlePublish() {
+    try {
+      await api.publishSchedule(schoolId);
+      setSaveMessage(t("publishDone"));
+    } catch {
+      setSaveMessage(t("publishFailed"));
+    }
+  }
+
+  async function loadSnapshotHistory() {
+    try {
+      const rows = await api.listScheduleSnapshots(schoolId);
+      setSnapshots(rows);
+      setShowHistory(true);
+    } catch {
+      setSaveMessage(t("historyFailed"));
+    }
+  }
+
+  async function handleRestoreSnapshot(snapshotId: number) {
+    try {
+      await api.restoreScheduleSnapshot(schoolId, snapshotId);
+      setShowHistory(false);
+      await reloadDraftForSelectedClass();
+      setSaveMessage(t("restoreDone"));
+    } catch {
+      setSaveMessage(t("restoreFailed"));
     }
   }
 
@@ -1477,7 +1590,11 @@ export function ScheduleBuilder({
       const filename = `atlas_schedule_${view}_${stamp}.${format}`;
       saveBlob(blob, filename);
       setSaveMessage(t("exported", { filename }));
-    } catch {
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 402) {
+        setUpgradeCapability("export");
+        return;
+      }
       setSaveMessage(t("exportFailed"));
     }
   }
@@ -1513,6 +1630,7 @@ export function ScheduleBuilder({
   return (
     <DndProvider backend={HTML5Backend}>
       <section className="schedule-builder space-y-2" data-testid="schedule-builder">
+        {upgradeCapability ? <UpgradePanel capability={upgradeCapability} onDismiss={() => setUpgradeCapability(null)} /> : null}
         <div className="schedule-action-bar reference-panel schedule-panel-tight">
           <div className="schedule-action-bar__filters">{filterSlot}</div>
           <div className="schedule-action-bar__actions">
@@ -1586,9 +1704,34 @@ export function ScheduleBuilder({
               >
                 {t("exportSchoolXlsx")}
               </button>
+              <button type="button" className="btn-schedule-secondary focus-ring-strong" onClick={() => void handlePublish()}>
+                {t("publish")}
+              </button>
+              <button type="button" className="btn-schedule-secondary focus-ring-strong" onClick={() => void loadSnapshotHistory()}>
+                {t("history")}
+              </button>
             </div>
           </div>
         </div>
+
+        {showHistory ? (
+          <div className="section-card snapshot-modal">
+            <h3 className="section-title">{t("historyTitle")}</h3>
+            <ul className="compact-list">
+              {snapshots.map((snap) => (
+                <li key={snap.id} className="compact-row">
+                  <span>{snap.label || snap.reason}</span>
+                  <button type="button" className="btn-schedule-ghost" onClick={() => void handleRestoreSnapshot(snap.id)}>
+                    {t("restore")}
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <button type="button" className="btn-schedule-ghost" onClick={() => setShowHistory(false)}>
+              {t("close")}
+            </button>
+          </div>
+        ) : null}
 
         <div className="schedule-validation-strip" aria-label={t("globalValidation")}>
           <span className="info-badge info-badge--neutral">{schoolLabel}</span>
@@ -1604,160 +1747,190 @@ export function ScheduleBuilder({
           <span className="schedule-validation-strip__shortcuts">{t("shortcuts")}</span>
         </div>
 
-        <div className="schedule-ghost-toolbar">
-          <div className="schedule-scope-toggle" role="group" aria-label={t("solverScopeLabel")}>
-            <label className="schedule-scope-option">
-              <input
-                type="radio"
-                name="solverScope"
-                checked={solverScope === "class"}
-                onChange={() => setSolverScope("class")}
-                data-testid="solver-scope-class"
-              />
-              {t("scopeClass")}
-            </label>
-            <label className="schedule-scope-option">
-              <input
-                type="radio"
-                name="solverScope"
-                checked={solverScope === "school"}
-                onChange={() => setSolverScope("school")}
-                data-testid="solver-scope-school"
-              />
-              {t("scopeSchool")}
-            </label>
-            {solverScope === "school" ? (
-              <label className="schedule-scope-option">
-                <input
-                  type="checkbox"
-                  checked={schoolSolverDraftOnly}
-                  onChange={(e) => setSchoolSolverDraftOnly(e.target.checked)}
-                  data-testid="school-solver-draft-only"
-                />
-                {t("schoolSolverDraftOnly")}
-              </label>
-            ) : null}
+        <div className="schedule-tools-panel reference-panel schedule-panel-tight" aria-label={t("toolsPanelLabel")}>
+          <div className="schedule-tools-panel__header">
+            <div className="schedule-tools-panel__scope">
+              <span className="schedule-tools-panel__scope-label">{t("solverScopeLabel")}</span>
+              <div className="schedule-scope-segment" role="group" aria-label={t("solverScopeLabel")}>
+                <button
+                  type="button"
+                  className="schedule-scope-segment__btn focus-ring-strong"
+                  aria-pressed={solverScope === "class"}
+                  onClick={() => setSolverScope("class")}
+                  data-testid="solver-scope-class"
+                >
+                  {t("scopeClass")}
+                </button>
+                <button
+                  type="button"
+                  className="schedule-scope-segment__btn focus-ring-strong"
+                  aria-pressed={solverScope === "school"}
+                  onClick={() => setSolverScope("school")}
+                  data-testid="solver-scope-school"
+                >
+                  {t("scopeSchool")}
+                </button>
+              </div>
+              {solverScope === "school" ? (
+                <label className="schedule-tools-panel__scope-extra">
+                  <input
+                    type="checkbox"
+                    checked={schoolSolverDraftOnly}
+                    onChange={(e) => setSchoolSolverDraftOnly(e.target.checked)}
+                    data-testid="school-solver-draft-only"
+                  />
+                  <span>{t("schoolSolverDraftOnly")}</span>
+                </label>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className={`schedule-tools-panel__view-toggle focus-ring-strong ${viewMode === "compact" ? "schedule-tools-panel__view-toggle--active" : ""}`}
+              onClick={() => setViewMode((prev) => (prev === "full" ? "compact" : "full"))}
+              aria-pressed={viewMode === "compact"}
+              aria-label={viewMode === "full" ? t("compactView") : t("fullView")}
+            >
+              {viewMode === "full" ? t("compactView") : t("fullView")}
+            </button>
           </div>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={!isDirty || saveStatus === "saving"}
-            onClick={resetDraft}
-          >
-            {t("restoreLast")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={!selectedSlot || !draftCards[selectedSlot]}
-            onClick={quickMoveSelected}
-          >
-            {t("quickMove")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={
-              !selectedSlot ||
-              !draftCards[selectedSlot] ||
-              isDirty ||
-              suggestLoading ||
-              saveStatus === "saving"
-            }
-            title={isDirty ? t("saveBeforeSuggestions") : t("pickBestSlot")}
-            onClick={() => void applyBestSuggestedSlot()}
-          >
-            {suggestLoading ? "…" : t("pickSlot")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={isDirty || fillFromPlanLoading || saveStatus === "saving"}
-            title={isDirty ? t("saveBeforeAutofill") : t("fillByPlanHint")}
-            onClick={() => void fillDraftFromCurriculumPlan()}
-          >
-            {fillFromPlanLoading ? "…" : t("fillByPlan")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={!selectedCard || scenarioLoading || saveStatus === "saving"}
-            onClick={() => void runTeacherAbsenceScenario()}
-          >
-            {scenarioLoading ? "…" : t("teacherAbsentDraft")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={scenarioLoading || saveStatus === "saving"}
-            onClick={() => void runShortenedDayScenario()}
-            data-testid="scenario-shortened-day"
-          >
-            {scenarioLoading ? "…" : t("scenarioShortenedDay")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={solverRunning || saveStatus === "saving"}
-            title={solverScope === "school" ? t("fillGapsHint") : t("fillByPlanHint")}
-            onClick={() => void runSolverDraft("cp_sat")}
-            data-testid="solver-cp-sat"
-          >
-            {solverRunning ? "…" : t("solverDraft")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={solverRunning || saveStatus === "saving"}
-            onClick={() => void runSolverDraft("ga_fallback")}
-          >
-            {solverRunning ? "…" : t("gaDraft")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={solverRunning || saveStatus === "saving"}
-            onClick={() => void runSolverDraft("reoptimize")}
-            data-testid="solver-reoptimize"
-          >
-            {solverRunning ? "…" : t("reoptimizeDraft")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={solverRunning || saveStatus === "saving"}
-            title={t("fromPlanHint")}
-            onClick={() => void runSolverDraft("cp_sat", { regenerateMode: "from_plan" })}
-            data-testid="solver-from-plan"
-          >
-            {solverRunning ? "…" : t("regenerateFromPlan")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={saveStatus === "saving"}
-            onClick={saveSandboxSnapshot}
-            data-testid="sandbox-save"
-          >
-            {t("sandboxSave")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            disabled={saveStatus === "saving"}
-            onClick={restoreSandboxSnapshot}
-            data-testid="sandbox-restore"
-          >
-            {t("sandboxRestore")}
-          </button>
-          <button
-            type="button"
-            className="btn-schedule-ghost focus-ring-strong"
-            onClick={() => setViewMode((prev) => (prev === "full" ? "compact" : "full"))}
-            aria-label="Toggle full view"
-          >
-            {viewMode === "full" ? t("compactView") : t("fullView")}
-          </button>
+
+          <div className="schedule-tools-panel__grid">
+            <section className="schedule-tool-group">
+              <h3 className="schedule-tool-group__label">{t("toolbarGroupEdit")}</h3>
+              <div className="schedule-tool-group__actions">
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={!isDirty || saveStatus === "saving"}
+                  onClick={resetDraft}
+                >
+                  {t("restoreLast")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={!selectedSlot || !draftCards[selectedSlot]}
+                  onClick={quickMoveSelected}
+                >
+                  {t("quickMove")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={
+                    !selectedSlot ||
+                    !draftCards[selectedSlot] ||
+                    isDirty ||
+                    suggestLoading ||
+                    saveStatus === "saving"
+                  }
+                  title={isDirty ? t("saveBeforeSuggestions") : t("pickBestSlot")}
+                  onClick={() => void applyBestSuggestedSlot()}
+                >
+                  {suggestLoading ? "…" : t("pickSlot")}
+                </button>
+              </div>
+            </section>
+
+            <section className="schedule-tool-group">
+              <h3 className="schedule-tool-group__label">{t("toolbarGroupDraft")}</h3>
+              <div className="schedule-tool-group__actions">
+                <button
+                  type="button"
+                  className="btn-schedule-tool btn-schedule-tool--primary focus-ring-strong"
+                  disabled={isDirty || fillFromPlanLoading || saveStatus === "saving"}
+                  title={isDirty ? t("saveBeforeAutofill") : t("fillByPlanHint")}
+                  onClick={() => void fillDraftFromCurriculumPlan()}
+                >
+                  {fillFromPlanLoading ? "…" : t("fillByPlan")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={!selectedCard || scenarioLoading || saveStatus === "saving"}
+                  onClick={() => void runTeacherAbsenceScenario()}
+                >
+                  {scenarioLoading ? "…" : t("teacherAbsentDraft")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={scenarioLoading || saveStatus === "saving"}
+                  onClick={() => void runShortenedDayScenario()}
+                  data-testid="scenario-shortened-day"
+                >
+                  {scenarioLoading ? "…" : t("scenarioShortenedDay")}
+                </button>
+              </div>
+            </section>
+
+            <section className="schedule-tool-group schedule-tool-group--solver">
+              <h3 className="schedule-tool-group__label">{t("toolbarGroupSolver")}</h3>
+              <div className="schedule-tool-group__actions">
+                <button
+                  type="button"
+                  className="btn-schedule-tool btn-schedule-tool--primary focus-ring-strong"
+                  disabled={solverRunning || saveStatus === "saving"}
+                  title={solverScope === "school" ? t("fillGapsHint") : t("fillByPlanHint")}
+                  onClick={() => void runSolverDraft("cp_sat")}
+                  data-testid="solver-cp-sat"
+                >
+                  {solverRunning ? "…" : t("solverDraft")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={solverRunning || saveStatus === "saving"}
+                  onClick={() => void runSolverDraft("ga_fallback")}
+                >
+                  {solverRunning ? "…" : t("gaDraft")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={solverRunning || saveStatus === "saving"}
+                  onClick={() => void runSolverDraft("reoptimize")}
+                  data-testid="solver-reoptimize"
+                >
+                  {solverRunning ? "…" : t("reoptimizeDraft")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-schedule-tool btn-schedule-tool--danger focus-ring-strong"
+                  disabled={solverRunning || saveStatus === "saving"}
+                  title={t("fromPlanHint")}
+                  onClick={() => void runSolverDraft("cp_sat", { regenerateMode: "from_plan" })}
+                  data-testid="solver-from-plan"
+                >
+                  {solverRunning ? "…" : t("regenerateFromPlan")}
+                </button>
+              </div>
+            </section>
+
+            <section className="schedule-tool-group">
+              <h3 className="schedule-tool-group__label">{t("toolbarGroupSandbox")}</h3>
+              <div className="schedule-tool-group__actions">
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={saveStatus === "saving"}
+                  onClick={saveSandboxSnapshot}
+                  data-testid="sandbox-save"
+                >
+                  {t("sandboxSave")}
+                </button>
+                <button
+                  type="button"
+                  className="btn-schedule-tool focus-ring-strong"
+                  disabled={saveStatus === "saving"}
+                  onClick={restoreSandboxSnapshot}
+                  data-testid="sandbox-restore"
+                >
+                  {t("sandboxRestore")}
+                </button>
+              </div>
+            </section>
+          </div>
         </div>
 
         {solverPollHint ? <p className="schedule-hint-text">{solverPollHint}</p> : null}

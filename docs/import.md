@@ -68,17 +68,18 @@ flowchart LR
 | `Subjects` | `name` (глобально) | `name`, `requires_special_room`, `required_specialization` |
 | `LessonSlots` | `day_of_week` + `lesson_number` | `day_of_week`, `lesson_number`, `start_time`, `end_time` |
 | `Classes` | `class_name` | `class_name`, `students_count` |
-| `Teachers` | `full_name` | `full_name`, `subjects`, `weekly_load_limit`, `unavailable_days` |
+| `Teachers` | `full_name` | `full_name`, `subject_1`…`subject_5`, `weekly_load_limit`, `unavailable_day_1`…`3` (dropdowns) |
 | `Classrooms` | `room_number` | `room_number`, `capacity`, `specialization` |
-| `GroupFlows` | `group_name` | `group_name`, `combined_classes` |
+| `GroupFlows` | `group_name` | `group_name`, `class_1`…`class_5` (dropdowns) |
 | `Curriculum` | `class_name` + `subject_name` | `class_name`, `subject_name`, `hours_per_week` |
 | `Schedule` | `class_name` + день + урок | `class_name`, `subject_name`, `teacher_full_name`, `room_number`, `day_of_week`, `lesson_number`, `is_grouped`, `group_name` |
 
 ### Форматы
 
 - **Boolean:** `true/false`, `yes/no`, `1/0`, `да/иә`
-- **Списки:** через запятую (`subjects`, `unavailable_days` как `1..7`)
-- **Ссылки:** лист `Schedule` может ссылаться на учителя с листа `Teachers` в том же файле
+- **Выпадающие списки:** в шаблоне скачанного Excel зависимые листы ссылаются на уже введённые строки (`Subjects` → `Teachers`/`Curriculum`/`Schedule` и т.д.). Ввод «с опечаткой» в этих колонках блокируется.
+- **Учитель:** до 5 предметов в `subject_1`…`subject_5`; старый формат `subjects` через запятую по-прежнему читается при импорте.
+- **Потоки:** до 5 классов в `class_1`…`class_5`; legacy `combined_classes` тоже поддерживается.
 
 ## Права доступа
 

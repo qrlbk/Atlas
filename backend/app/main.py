@@ -3,10 +3,12 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.admin import router as admin_router
 from app.api.analytics import router as analytics_router
 from app.api.auth import router as auth_router
 from app.api.imports import router as imports_router
 from app.api.resources import router as resources_router
+from app.api.product import router as product_router
 from app.api.solver_jobs import router as solver_jobs_router
 from app.api.suggestions import router as suggestions_router
 from app.api.validation import router as validation_router
@@ -25,12 +27,14 @@ app.add_middleware(
 )
 
 app.include_router(auth_router)
+app.include_router(admin_router)
 app.include_router(resources_router)
 app.include_router(validation_router)
 app.include_router(analytics_router)
 app.include_router(suggestions_router)
 app.include_router(imports_router)
 app.include_router(solver_jobs_router)
+app.include_router(product_router)
 
 
 @app.middleware("http")

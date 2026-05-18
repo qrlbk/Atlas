@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.schemas.readiness import HumanDiagnosticOut
 from app.schemas.suggestions import ScheduleDraftOperationOut, UnplacedSubjectOut
 
 
@@ -33,4 +34,5 @@ class SolverJobStatusResponse(BaseModel):
     operations: list[ScheduleDraftOperationOut] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
     unplaced_details: list[UnplacedSubjectOut] = Field(default_factory=list)
+    diagnostics: list[HumanDiagnosticOut] = Field(default_factory=list)
     quality: dict | None = None

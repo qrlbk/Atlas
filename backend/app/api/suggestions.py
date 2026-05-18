@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import enforce_school_scope, get_current_user, require_roles
 from app.core.db import get_db
-from app.models.entities import StudentClass, User, UserRole
+from app.i18n import resolve_locale
+from app.models.entities import School, StudentClass, User, UserRole
 from app.schemas.suggestions import (
     GenerateClassRequest,
     GenerateClassResponse,
@@ -14,6 +15,8 @@ from app.schemas.suggestions import (
     SuggestSlotsRequest,
     UnplacedSubjectOut,
 )
+from app.services.entitlements import check_slot_suggestion_allowed, increment_usage, require_capability
+from app.services.human_diagnostics import diagnostics_from_unplaced
 from app.services.scenario_engine import ScenarioConfig, apply_scenario
 from app.services.school_integrity import assert_schedule_payload_consistent
 from app.services.schedule_solver import generate_draft_for_class, suggest_slot_combinations
@@ -30,6 +33,12 @@ def suggest_slots(
     current_user: User = Depends(get_current_user),
 ):
     enforce_school_scope(current_user, payload.school_id)
+    school = db.get(School, payload.school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail={"key": "errors.requestValidation"})
+    check_slot_suggestion_allowed(db, school)
+    increment_usage(db, payload.school_id, "slot_suggestion")
+    db.commit()
     assert_schedule_payload_consistent(db, payload.candidate)
     options = suggest_slot_combinations(db, payload.school_id, payload.candidate, top_n=payload.top_n)
     return [SlotSuggestionOut(**row) for row in options]
@@ -43,6 +52,10 @@ def generate_class_draft(
     current_user: User = Depends(get_current_user),
 ):
     enforce_school_scope(current_user, payload.school_id)
+    school = db.get(School, payload.school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail={"key": "errors.requestValidation"})
+    require_capability(db, school, "generate_class")
     student_class = db.get(StudentClass, payload.class_id)
     if student_class is None or student_class.school_id != payload.school_id:
         raise HTTPException(status_code=400, detail={"key": "errors.classNotFoundInSchool"})
@@ -54,11 +67,16 @@ def generate_class_draft(
 @router.post("/scenario-draft", response_model=ScenarioDraftResponse)
 def scenario_draft(
     payload: ScenarioDraftRequest,
+    request: Request,
     db: Session = Depends(get_db),
     _: User = Depends(suggestions_user),
     current_user: User = Depends(get_current_user),
 ):
     enforce_school_scope(current_user, payload.school_id)
+    school = db.get(School, payload.school_id)
+    if school is None:
+        raise HTTPException(status_code=404, detail={"key": "errors.requestValidation"})
+    require_capability(db, school, "scenario")
     allowed = {
         "teacher_absent",
         "substitute_teacher",

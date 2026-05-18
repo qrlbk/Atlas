@@ -139,6 +139,22 @@ def _run_solver_job(job_id: str):
         pending: list[ScheduleItemIn] = []
         engine_tag = job.strategy
 
+        if job.class_id is None:
+            for student_class in classes:
+                plan_count = int(
+                    db.scalar(
+                        select(func.count())
+                        .select_from(ClassSubjectHours)
+                        .where(
+                            ClassSubjectHours.school_id == job.school_id,
+                            ClassSubjectHours.class_id == student_class.id,
+                        )
+                    )
+                    or 0
+                )
+                if plan_count == 0:
+                    all_issues.append("NO_CURRICULUM_FOR_CLASS")
+
         def _append_proposals(proposals: list[ScheduleItemIn], current: SolverJobRecord) -> None:
             for proposal in proposals:
                 if proposal.lesson_slot_id in current.frozen_lesson_slot_ids:

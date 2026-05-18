@@ -18,3 +18,11 @@ def test_import_routes_exist():
     assert "/imports/template" in paths
     assert "/imports/validate" in paths
     assert "/imports/commit" in paths
+
+
+def test_admin_routes_exist():
+    from app.main import app
+
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert "/admin/dashboard" in paths
+    assert "/auth/me" in paths

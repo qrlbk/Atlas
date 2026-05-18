@@ -134,8 +134,24 @@ alembic upgrade head
 
 Актуальное поведение — в [документации](README.md) и коде, не в устаревших планах.
 
+## Admin Console
+
+Внутренняя панель: frontend `/admin`, API `/admin/*` (только `role=admin`).
+
+**Первый admin:** `python -m app.scripts.seed` создаёт `admin@atlas.example.com` (пароль `AtlasSeed!2026` по умолчанию, см. `ATLAS_SEED_ADMIN_*` в seed).
+
+**Второй admin вручную:**
+
+```sql
+INSERT INTO users (email, full_name, password_hash, role, school_id)
+VALUES ('ops@example.com', 'Ops', '<pbkdf2_hash>', 'admin', NULL);
+```
+
+Или дублировать логику `get_password_hash` из Python shell. После входа проверьте `GET /auth/me` → `role: admin`.
+
 ## См. также
 
 - [Начало работы](getting-started.md)
+- [Admin API](api.md#admin-api-internal-roleadmin-only)
 - [Разработка](development.md)
 - [Архитектура](architecture.md)

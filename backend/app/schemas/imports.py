@@ -82,6 +82,8 @@ class ImportSummary(BaseModel):
     error_count: int = 0
     warning_count: int = 0
     sheets: list[SheetStats] = Field(default_factory=list)
+    entity_preview: dict[str, int] = Field(default_factory=dict)
+    issue_buckets: dict[str, int] = Field(default_factory=dict)
 
 
 class ValidateResponse(BaseModel):

@@ -86,6 +86,29 @@ def test_template_download_returns_xlsx(api_client: TestClient, db_session: Sess
     assert "Schedule" in wb.sheetnames
 
 
+def test_template_has_cross_sheet_dropdowns(api_client: TestClient, db_session: Session):
+    ctx = _seed_school(db_session)
+    headers = _token(api_client, "mgr@example.com")
+    r = api_client.get(f"/imports/template?school_id={ctx['school'].id}", headers=headers)
+    assert r.status_code == 200
+    wb = load_workbook(io.BytesIO(r.content))
+    assert "AtlasSubjects" in wb.defined_names
+    assert "AtlasClasses" in wb.defined_names
+
+    curriculum = wb["Curriculum"]
+    subject_validations = [
+        dv
+        for dv in curriculum.data_validations.dataValidation
+        if dv.type == "list" and "AtlasSubjects" in (dv.formula1 or "")
+    ]
+    assert subject_validations, "Curriculum.subject_name should use AtlasSubjects dropdown"
+
+    teachers = wb["Teachers"]
+    header_row = [cell.value for cell in teachers[1]]
+    assert "subject_1" in header_row
+    assert "subjects" not in header_row
+
+
 def test_template_requires_school_scope(api_client: TestClient, db_session: Session):
     ctx = _seed_school(db_session)
     headers = _token(api_client, "other@example.com")
@@ -362,6 +385,11 @@ def test_append_mode_skips_existing_rows(api_client: TestClient, db_session: Ses
     db_session.commit()
 
     payload = _build_workbook({
+        "Subjects": [
+            ["name", "requires_special_room", "required_specialization"],
+            ["Math", False, ""],
+            ["Physics", False, ""],
+        ],
         "Teachers": [
             ["full_name", "subjects", "weekly_load_limit", "unavailable_days"],
             ["Ada", "Physics", 20, ""],
